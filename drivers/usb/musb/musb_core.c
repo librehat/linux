@@ -2508,13 +2508,18 @@ musb_init_controller(struct device *dev, int nIrq, void __iomem *ctrl)
 		goto fail3;
 	}
 	musb->nIrq = nIrq;
-	/* FIXME this handles wakeup irqs wrong */
-	if (enable_irq_wake(nIrq) == 0) {
-		musb->irq_wake = 1;
-		device_init_wakeup(dev, 1);
-	} else {
-		musb->irq_wake = 0;
-	}
+	/*
+	 * The musb IRQ fires on ordinary USB activity (SOF, packets, DMA), not
+	 * just on wake-worthy events, so arming it as a system wake source for
+	 * the controller's whole lifetime makes it abort every suspend while a
+	 * cable is attached. Advertise wakeup capability instead and let the
+	 * suspend/resume hooks arm the wake IRQ only when userspace has enabled
+	 * wakeup for this device (device_may_wakeup()); default to disabled so
+	 * the system can suspend while enumerated.
+	 */
+	device_set_wakeup_capable(dev, true);
+	device_wakeup_disable(dev);
+	musb->irq_wake = 0;
 
 	/* program PHY to use external vBus if required */
 	if (plat->extvbus) {
