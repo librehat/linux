@@ -6,10 +6,12 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/processor.h>
 #include <linux/regulator/consumer.h>
 #include <linux/usb/role.h>
 #include "musb_core.h"
@@ -238,10 +240,119 @@ static int sprd_musb_exit(struct musb *musb)
 	return 0;
 }
 
+static void sprd_musb_dma_pause(void __iomem *mregs)
+{
+	int cnt = 262144;
+	u32 pause;
+
+	/* Pause DMA during PIO FIFO access to prevent losing TX bytes on UMS512. */
+	writel_relaxed(0x1, mregs + MUSB_DMA_PAUSE);
+	do {
+		pause = readl_relaxed(mregs + MUSB_DMA_PAUSE);
+		if (pause & BIT(16))
+			break;
+		cpu_relax();
+	} while (cnt-- > 0);
+}
+
+static void sprd_musb_dma_unpause(void __iomem *mregs)
+{
+	writel_relaxed(0x0, mregs + MUSB_DMA_PAUSE);
+}
+
+static void sprd_musb_write_fifo(struct musb_hw_ep *hw_ep, u16 len,
+				 const u8 *src)
+{
+	struct musb *musb = hw_ep->musb;
+	void __iomem *fifo = hw_ep->fifo;
+
+	if (unlikely(len == 0))
+		return;
+
+	sprd_musb_dma_pause(musb->mregs);
+
+	dev_dbg(musb->controller, "%cX ep%d fifo %p count %d buf %p\n",
+		'T', hw_ep->epnum, fifo, len, src);
+
+	/* we can't assume unaligned reads work */
+	if (likely((0x01 & (unsigned long)src) == 0)) {
+		u16 index = 0;
+
+		/* best case is 32bit-aligned source address */
+		if ((0x02 & (unsigned long)src) == 0) {
+			if (len >= 4) {
+				iowrite32_rep(fifo, src + index, len >> 2);
+				index += len & ~0x03;
+			}
+			if (len & 0x02) {
+				__raw_writew(*(u16 *)&src[index], fifo);
+				index += 2;
+			}
+		} else {
+			if (len >= 2) {
+				iowrite16_rep(fifo, src + index, len >> 1);
+				index += len & ~0x01;
+			}
+		}
+		if (len & 0x01)
+			__raw_writeb(src[index], fifo);
+	} else {
+		/* byte aligned */
+		iowrite8_rep(fifo, src, len);
+	}
+
+	sprd_musb_dma_unpause(musb->mregs);
+}
+
+static void sprd_musb_read_fifo(struct musb_hw_ep *hw_ep, u16 len, u8 *dst)
+{
+	struct musb *musb = hw_ep->musb;
+	void __iomem *fifo = hw_ep->fifo;
+
+	if (unlikely(len == 0))
+		return;
+
+	sprd_musb_dma_pause(musb->mregs);
+
+	dev_dbg(musb->controller, "%cX ep%d fifo %p count %d buf %p\n",
+		'R', hw_ep->epnum, fifo, len, dst);
+
+	/* we can't assume unaligned writes work */
+	if (likely((0x01 & (unsigned long)dst) == 0)) {
+		u16 index = 0;
+
+		/* best case is 32bit-aligned destination address */
+		if ((0x02 & (unsigned long)dst) == 0) {
+			if (len >= 4) {
+				ioread32_rep(fifo, dst, len >> 2);
+				index = len & ~0x03;
+			}
+			if (len & 0x02) {
+				*(u16 *)&dst[index] = __raw_readw(fifo);
+				index += 2;
+			}
+		} else {
+			if (len >= 2) {
+				ioread16_rep(fifo, dst, len >> 1);
+				index = len & ~0x01;
+			}
+		}
+		if (len & 0x01)
+			dst[index] = __raw_readb(fifo);
+	} else {
+		/* byte aligned */
+		ioread8_rep(fifo, dst, len);
+	}
+
+	sprd_musb_dma_unpause(musb->mregs);
+}
+
 static const struct musb_platform_ops sprd_musb_ops = {
 	.quirks = MUSB_DMA_SPRD | MUSB_G_NO_SKB_RESERVE,
 	.init = sprd_musb_init,
 	.exit = sprd_musb_exit,
+	.read_fifo = sprd_musb_read_fifo,
+	.write_fifo = sprd_musb_write_fifo,
 	.dma_init = sprd_musb_dma_controller_create,
 	.dma_exit = sprd_musb_dma_controller_destroy,
 	.set_mode = sprd_musb_set_mode,
@@ -295,7 +406,7 @@ static const struct musb_hdrc_config sprd_musb_hdrc_config = {
 static const struct platform_device_info sprd_dev_info = {
 	.name = "musb-hdrc",
 	.id = PLATFORM_DEVID_AUTO,
-	.dma_mask = DMA_BIT_MASK(32),
+	.dma_mask = DMA_BIT_MASK(36),
 };
 
 static int sprd_musb_probe(struct platform_device *pdev)

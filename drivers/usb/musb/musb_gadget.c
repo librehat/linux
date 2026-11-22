@@ -54,18 +54,40 @@ static inline void map_dma_buffer(struct musb_request *request,
 
 	if (request->request.dma == DMA_ADDR_INVALID) {
 		dma_addr_t dma_addr;
+		void *buf = request->request.buf;
 		int ret;
+
+		/*
+		 * Unisoc MUSB DMA masks the low two address bits and requires
+		 * 4-byte aligned DMA buffers.
+		 */
+		if (musb_dma_sprd(musb) && request->request.length &&
+		    ((unsigned long)buf & 3)) {
+			void *bounce = kmalloc(request->request.length,
+					       GFP_ATOMIC);
+			if (!bounce)
+				return;
+
+			if (request->tx)
+				memcpy(bounce, buf, request->request.length);
+
+			request->bounce_buf = bounce;
+			buf = bounce;
+		}
 
 		dma_addr = dma_map_single(
 				musb->controller,
-				request->request.buf,
+				buf,
 				request->request.length,
 				request->tx
 					? DMA_TO_DEVICE
 					: DMA_FROM_DEVICE);
 		ret = dma_mapping_error(musb->controller, dma_addr);
-		if (ret)
+		if (ret) {
+			kfree(request->bounce_buf);
+			request->bounce_buf = NULL;
 			return;
+		}
 
 		request->request.dma = dma_addr;
 		request->map_state = MUSB_MAPPED;
@@ -102,6 +124,15 @@ static inline void unmap_dma_buffer(struct musb_request *request,
 				? DMA_TO_DEVICE
 				: DMA_FROM_DEVICE);
 		request->request.dma = DMA_ADDR_INVALID;
+		if (request->bounce_buf) {
+			if (!request->tx && request->request.actual)
+				memcpy(request->request.buf,
+				       request->bounce_buf,
+				       min(request->request.actual,
+					   request->request.length));
+			kfree(request->bounce_buf);
+			request->bounce_buf = NULL;
+		}
 	} else { /* PRE_MAPPED */
 		dma_sync_single_for_cpu(musb->controller,
 			request->request.dma,
@@ -143,6 +174,10 @@ __acquires(ep->musb->lock)
 
 	if (!dma_mapping_error(&musb->g.dev, request->dma))
 		unmap_dma_buffer(req, musb);
+	if (req->bounce_buf) {
+		kfree(req->bounce_buf);
+		req->bounce_buf = NULL;
+	}
 
 	trace_musb_req_gb(req);
 	usb_gadget_giveback_request(&req->ep->end_point, &req->request);
@@ -281,8 +316,7 @@ static void txstate(struct musb *musb, struct musb_request *req)
 
 		/* MUSB_TXCSR_P_ISO is still set correctly */
 
-		if (musb_dma_inventra(musb) || musb_dma_ux500(musb) ||
-		    musb_dma_sprd(musb)) {
+		if (musb_dma_inventra(musb) || musb_dma_ux500(musb)) {
 			if (request_size < musb_ep->packet_sz)
 				musb_ep->dma->desired_mode = 0;
 			else
@@ -328,6 +362,32 @@ static void txstate(struct musb *musb, struct musb_request *req)
 				}
 				csr &= ~MUSB_TXCSR_P_UNDERRUN;
 
+				musb_writew(epio, MUSB_TXCSR, csr);
+			}
+		} else if (musb_dma_sprd(musb) && use_dma) {
+			/*
+			 * Unisoc MUSB DMA always operates in mode 1 with AUTOSET
+			 * enabled, and TXCSR must be configured before enabling
+			 * the DMA channel.
+			 */
+			musb_ep->dma->desired_mode = 1;
+			csr &= ~MUSB_TXCSR_P_UNDERRUN;
+			csr |= MUSB_TXCSR_AUTOSET | MUSB_TXCSR_DMAMODE |
+			       MUSB_TXCSR_DMAENAB | MUSB_TXCSR_MODE;
+			musb_writew(epio, MUSB_TXCSR, csr);
+			csr = musb_readw(epio, MUSB_TXCSR);
+
+			use_dma = c->channel_program(
+					musb_ep->dma, musb_ep->packet_sz,
+					1,
+					request->dma + request->actual,
+					request_size);
+			if (!use_dma) {
+				csr &= ~(MUSB_TXCSR_AUTOSET
+					| MUSB_TXCSR_DMAENAB);
+				musb_writew(epio, MUSB_TXCSR,
+					    csr | MUSB_TXCSR_P_WZC_BITS);
+				csr &= ~MUSB_TXCSR_DMAMODE;
 				musb_writew(epio, MUSB_TXCSR, csr);
 			}
 		}
@@ -560,8 +620,9 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 		struct dma_channel	*channel = musb_ep->dma;
 
 		csr |= MUSB_RXCSR_AUTOCLEAR | MUSB_RXCSR_DMAMODE |
-			MUSB_RXCSR_DMAENAB;
+			MUSB_RXCSR_DMAENAB | MUSB_RXCSR_P_WZC_BITS;
 		musb_writew(epio, MUSB_RXCSR, csr);
+		csr = musb_readw(epio, MUSB_RXCSR);
 
 		c->channel_program(channel,
 				   musb_ep->packet_sz,
@@ -1186,6 +1247,8 @@ void musb_ep_restart(struct musb *musb, struct musb_request *req)
 	musb_ep_select(musb->mregs, req->epnum);
 	if (req->tx) {
 		txstate(musb, req);
+	} else if (musb_dma_sprd(musb)) {
+		rxstate(musb, req);
 	} else {
 		csr = musb_readw(epio, MUSB_RXCSR);
 		csr |= MUSB_RXCSR_FLUSHFIFO | MUSB_RXCSR_P_WZC_BITS;

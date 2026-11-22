@@ -55,6 +55,7 @@ struct musb_request {
 	struct list_head	list;
 	struct musb_ep		*ep;
 	struct musb		*musb;
+	void			*bounce_buf;
 	u8 tx;			/* endpoint direction */
 	u8 epnum;
 	enum buffer_map_state map_state;
