@@ -21,8 +21,9 @@
 struct sprd_musb_dma_channel {
 	struct dma_channel		channel;
 	struct sprd_musb_dma_controller	*controller;
-	u32				start_addr;
+	dma_addr_t			start_addr;
 	u32				len;
+	u32				node_count;
 	u8				idx;
 	u8				epnum;
 	u8				transmit;
@@ -88,6 +89,9 @@ static struct dma_channel *dma_channel_allocate(struct dma_controller *c,
 	channel->desired_mode = transmit;
 	channel->actual_len = 0;
 
+	/* Wait 9 cycles so DMA latches USB request length cleanly */
+	musb_writel(controller->base, MUSB_DMA_FRAG_WAIT, 0x8);
+
 	return channel;
 }
 
@@ -131,12 +135,12 @@ static void configure_channel(struct dma_channel *channel,
 		else
 			tmp_len = 0xfffc;
 
-		next_boundary = (dma_addr | 0xfffffff) + 1;
+		next_boundary = (dma_addr | 0xfffffffULL) + 1;
 		if ((dma_addr + tmp_len) > next_boundary)
 			tmp_len = (u32)(next_boundary - dma_addr);
 
-		linklist->addr = (u32)dma_addr;
-		linklist->data_addr = 0;
+		linklist->addr = lower_32_bits(dma_addr);
+		linklist->data_addr = upper_32_bits(dma_addr) & 0xf;
 		linklist->frag_len = 32;
 		linklist->blk_len = tmp_len;
 		linklist->list_end = tmp_len == len;
@@ -149,11 +153,15 @@ static void configure_channel(struct dma_channel *channel,
 		i += 1;
 	} while (len > 0 && i < MAX_NODES_PER_CHANNEL);
 
+	musb_channel->node_count = i;
+
 	wmb();
 
 	/* set linklist pointer */
-	musb_writel(mbase, MUSB_DMA_CHN_LLIST_PTR(bchannel), (u32)list_addr);
-	musb_writel(mbase, MUSB_DMA_CHN_ADDR_H(bchannel), 0);
+	musb_writel(mbase, MUSB_DMA_CHN_LLIST_PTR(bchannel),
+		    lower_32_bits(list_addr));
+	musb_writel(mbase, MUSB_DMA_CHN_ADDR_H(bchannel),
+		    (upper_32_bits(list_addr) & 0xf) << 4);
 
 	if (musb_channel->transmit) {
 		/* enable linklist end interrupt */
@@ -194,7 +202,7 @@ static int dma_channel_program(struct dma_channel *channel,
 		channel->status == MUSB_DMA_STATUS_BUSY);
 
 	channel->actual_len = 0;
-	musb_channel->start_addr = (u32)dma_addr;
+	musb_channel->start_addr = dma_addr;
 	musb_channel->len = len;
 	channel->status = MUSB_DMA_STATUS_BUSY;
 
@@ -214,6 +222,10 @@ static int dma_channel_abort(struct dma_channel *channel)
 	u16 csr;
 
 	if (channel->status == MUSB_DMA_STATUS_BUSY) {
+		musb_writel(mbase, MUSB_DMA_CHN_PAUSE(bchannel),
+			    musb_readl(mbase, MUSB_DMA_CHN_PAUSE(bchannel)) | CHN_CLR);
+		musb_writel(mbase, MUSB_DMA_CHN_CFG(bchannel), 0);
+
 		if (musb_channel->transmit) {
 			offset = musb->io.ep_offset(musb_channel->epnum,
 						MUSB_TXCSR);
@@ -240,6 +252,7 @@ static int dma_channel_abort(struct dma_channel *channel)
 
 		musb_writel(mbase, MUSB_DMA_CHN_LLIST_PTR(bchannel), 0);
 		musb_writel(mbase, MUSB_DMA_CHN_ADDR(bchannel), 0);
+		musb_writel(mbase, MUSB_DMA_CHN_ADDR_H(bchannel), 0);
 		channel->status = MUSB_DMA_STATUS_FREE;
 	}
 
@@ -250,37 +263,81 @@ static void sprd_musb_dma_complete(struct musb *musb,
 				   struct sprd_musb_dma_channel *musb_channel)
 {
 	struct dma_channel *channel = &musb_channel->channel;
+	struct sprd_musb_dma_controller *controller = musb_channel->controller;
 	void __iomem *mbase = musb->mregs;
-	u32 dma_addr;
-
-	dma_addr = musb_readl(mbase, MUSB_DMA_CHN_ADDR(musb_channel->idx));
+	u8 bchannel = musb_channel->idx;
+	u32 blk_len;
 
 	/* Incomplete transfers are not possible when transmitting */
-	if (musb_channel->transmit)
+	if (musb_channel->transmit) {
 		channel->actual_len = musb_channel->len;
-	else
-		channel->actual_len = dma_addr - musb_channel->start_addr;
+	} else {
+		blk_len = (musb_readl(mbase, MUSB_DMA_CHN_LEN(bchannel)) >> 16) &
+			  0xffff;
 
-	/*
-	 * When receiving data, dma_addr sometimes points to a location that
-	 * is not related to the current transfer. When this happens, we assume
-	 * that the transfer did not actually happen and reconfigure DMA to
-	 * receive again.
-	 */
-	if (channel->actual_len > musb_channel->len) {
-		dev_warn(musb->controller,
-			 "unexpected dma_addr=%08x, start=%08x\n",
-			 dma_addr, musb_channel->start_addr);
-		configure_channel(channel, musb_channel->start_addr,
-				  musb_channel->len);
-		return;
+		if (musb_channel->node_count <= 1) {
+			if (blk_len > musb_channel->len) {
+				dev_warn(musb->controller,
+					 "unexpected rx blk_len=%u > len=%u\n",
+					 blk_len, musb_channel->len);
+				configure_channel(channel,
+						  musb_channel->start_addr,
+						  musb_channel->len);
+				return;
+			}
+			channel->actual_len = musb_channel->len - blk_len;
+		} else {
+			struct sprd_musb_linklist_node *ll;
+			unsigned long ll_offset;
+			u32 dma_addr, unused_len = 0;
+			u32 i, j;
+
+			dma_addr = musb_readl(mbase,
+					      MUSB_DMA_CHN_ADDR(bchannel));
+			ll_offset = sizeof(struct sprd_musb_linklist_node) *
+				    MAX_NODES_PER_CHANNEL * (bchannel - 1);
+			ll = controller->linklist + ll_offset;
+
+			for (i = 0; i < musb_channel->node_count; i++) {
+				if ((u32)(ll[i].addr + ll[i].blk_len - blk_len) ==
+				    dma_addr)
+					break;
+			}
+
+			if (i == musb_channel->node_count) {
+				dev_warn(musb->controller,
+					 "unexpected dma_addr=%08x, blk_len=%u, start=%pad\n",
+					 dma_addr, blk_len,
+					 &musb_channel->start_addr);
+				configure_channel(channel,
+						  musb_channel->start_addr,
+						  musb_channel->len);
+				return;
+			}
+
+			for (j = i + 1; j < musb_channel->node_count; j++)
+				unused_len += ll[j].blk_len;
+
+			if (unused_len + blk_len > musb_channel->len) {
+				dev_warn(musb->controller,
+					 "unexpected rx unused=%u blk_len=%u > len=%u\n",
+					 unused_len, blk_len,
+					 musb_channel->len);
+				configure_channel(channel,
+						  musb_channel->start_addr,
+						  musb_channel->len);
+				return;
+			}
+			channel->actual_len = musb_channel->len -
+					      unused_len - blk_len;
+		}
 	}
 
 	channel->status = MUSB_DMA_STATUS_FREE;
 
 	dev_dbg(musb->controller, "%cx actual_len=%lu on channel %d\n",
 		musb_channel->transmit ? 'T' : 'R', channel->actual_len,
-		musb_channel->idx);
+		bchannel);
 	musb_dma_completion(musb, musb_channel->epnum,
 			    musb_channel->transmit);
 }
@@ -389,6 +446,8 @@ sprd_musb_dma_controller_create(struct musb *musb, void __iomem *base)
 		return NULL;
 
 	/* reset DMA to avoid unexpected problems if USB was already enabled */
+	musb_writel(base, MUSB_DMA_PAUSE, 0);
+	musb_writel(base, MUSB_DMA_FRAG_WAIT, 0x8);
 	for (i = 1; i <= MUSB_DMA_CHANNELS; i++) {
 		musb_writel(base, MUSB_DMA_CHN_PAUSE(i), CHN_CLR);
 		musb_writel(base, MUSB_DMA_CHN_CFG(i), 0);
