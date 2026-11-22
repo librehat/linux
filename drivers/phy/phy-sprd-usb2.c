@@ -94,8 +94,9 @@ static int sprd_hsphy_init(struct phy *phy)
 	regmap_set_bits(hsphy->ana_regs, hsphy->data->utmi_ctl1_reg,
 			BIT_ANLG_USB20_DATABUS16_8);
 
-	regmap_write(hsphy->ana_regs, hsphy->data->trimming_reg,
-		     DEFAULT_EYE_PATTERN);
+	if (hsphy->data->trimming_reg)
+		regmap_write(hsphy->ana_regs, hsphy->data->trimming_reg,
+			     DEFAULT_EYE_PATTERN);
 
 	if (hsphy->data->apb_rst1) {
 		regmap_set_bits(hsphy->aon_apb, hsphy->data->apb_rst1,
@@ -281,7 +282,7 @@ static const struct sprd_hsphy_data ums512_data = {
 	.pd_reg			= 0x005c,	/* BATTER_PLL (PS_PD_L/S) */
 	.utmi_ctl1_reg		= 0x0058,	/* UTMI_CTL1 */
 	.utmi_ctl2_reg		= 0x0060,	/* UTMI_CTL2 */
-	.trimming_reg		= 0x0064,	/* TRIMMING */
+	/* Leave UMS512 hardware/bootloader eye-pattern trimming untouched */
 	.reg_sel_cfg_reg	= 0x0074,	/* REG_SEL_CFG_0 */
 	.reg_sel_mask		= BIT(2) | BIT(1),
 };
