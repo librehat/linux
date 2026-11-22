@@ -8,6 +8,7 @@
 
 /dts-v1/;
 
+#include <dt-bindings/clock/sprd,ums512-clk.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
@@ -18,9 +19,8 @@
 	compatible = "samsung,gtaba8", "sprd,ums512";
 
 	/*
-	 * Stock Samsung LK inspects sprd,sc-id. Must NOT match the stock DTBO id
-	 * (0x1100), otherwise LK will attempt to merge downstream 4.14 vendor overlays
-	 * onto the mainline Devicetree and hang early in boot.
+	 * Matches stock base DTB sprd,sc-id. Note: LK still selects DTBO by
+	 * board_id 0x1100, so dtbo-noop.img must be flashed to the dtbo partition.
 	 */
 	sprd,sc-id = "ums512 1000 1000";
 
@@ -33,13 +33,28 @@
 
 	memory@80000000 {
 		device_type = "memory";
-		reg = <0x00 0x80000000 0x00 0xbffff000>;
+		reg = <0x00 0x80000000 0x00 0xfffff000>;
 	};
 
 	chosen {
 		#address-cells = <2>;
 		#size-cells = <2>;
+		ranges;
 		stdout-path = "serial1:115200n8";
+
+		framebuffer0: framebuffer@9e000000 {
+			compatible = "simple-framebuffer";
+			reg = <0x00 0x9e000000 0x00 0x009e4000>;
+			width = <1200>;
+			height = <1920>;
+			stride = <(1200 * 4)>;
+			format = "x8r8g8b8";
+			memory-region = <&framebuffer_region>;
+			clocks = <&apahb_gate CLK_DISPC_EB>,
+				 <&ap_clk CLK_DISPC0>,
+				 <&ap_clk CLK_DISPC0_DPI>,
+				 <&apahb_gate CLK_DSI_EB>;
+		};
 	};
 
 	reserved-memory {
@@ -47,19 +62,99 @@
 		#size-cells = <2>;
 		ranges;
 
+		ddrbist-mem@80000000 {
+			reg = <0x00 0x80000000 0x00 0x1000>;
+			no-map;
+		};
+
+		sysdumpinfo-mem@80001000 {
+			reg = <0x00 0x80001000 0x00 0x1000>;
+			no-map;
+		};
+
+		rebootescrow@81ff0000 {
+			reg = <0x00 0x81ff0000 0x00 0x10000>;
+			no-map;
+		};
+
+		audio-mem@87500000 {
+			reg = <0x00 0x87500000 0x00 0x300000>;
+			no-map;
+		};
+
+		sipc-mem@87800000 {
+			reg = <0x00 0x87800000 0x00 0x800000>;
+			no-map;
+		};
+
+		sp-ddr-mem@88000000 {
+			reg = <0x00 0x88000000 0x00 0x300000>;
+			no-map;
+		};
+
+		sipc_ss-mem@88300000 {
+			reg = <0x00 0x88300000 0x00 0x80000>;
+			no-map;
+		};
+
+		audiodsp-mem@89000000 {
+			reg = <0x00 0x89000000 0x00 0x600000>;
+			no-map;
+		};
+
+		cp-modem@89600000 {
+			reg = <0x00 0x89600000 0x00 0x5500000>;
+			no-map;
+		};
+
+		sec_debug_region@8f000000 {
+			reg = <0x00 0x8f000000 0x00 0x900000>;
+			no-map;
+		};
+
+		ss_plog@8f900000 {
+			reg = <0x00 0x8f900000 0x00 0x200000>;
+			no-map;
+		};
+
+		uboot_log-mem@92400000 {
+			reg = <0x00 0x92400000 0x00 0x80000>;
+			no-map;
+		};
+
+		sml-mem@94000000 {
+			reg = <0x00 0x94000000 0x00 0x40000>;
+			no-map;
+		};
+
+		tos-mem@94040000 {
+			reg = <0x00 0x94040000 0x00 0x5fc0000>;
+			no-map;
+		};
+
+		sh-mem@9a000000 {
+			reg = <0x00 0x9a000000 0x00 0x100000>;
+			no-map;
+		};
+
 		/* Bootloader splash framebuffer at 0x9e000000 (1200x1920 @ 32bpp) */
 		framebuffer_region: framebuffer@9e000000 {
 			reg = <0x00 0x9e000000 0x00 0x009e4000>;
 			no-map;
 		};
 
-		/* Ramoops / pstore persistent crash log buffer */
+		/* Ramoops / pstore persistent crash log buffer matching recovery FDT */
 		ramoops: ramoops@fff80000 {
 			compatible = "ramoops";
-			reg = <0x00 0xfff80000 0x00 0x00080000>;
-			record-size = <0x20000>;
-			console-size = <0x40000>;
-			pmsg-size = <0x20000>;
+			reg = <0x00 0xfff80000 0x00 0x40000>;
+			record-size = <0x8000>;
+			console-size = <0x8000>;
+			pmsg-size = <0x8000>;
+		};
+
+		debug-mem@100000000 {
+			reg = <0x01 0x00 0x00 0x1000>;
+			no-map;
 		};
 	};
 };
@@ -84,11 +179,17 @@
 /* Internal eMMC (boot device) */
 &sdio3 {
 	status = "okay";
+	vmmc-supply = <&ldo_vddemmccore>;
 	bus-width = <8>;
 	non-removable;
 	cap-mmc-hw-reset;
 	no-sd;
 	no-sdio;
+	sprd,phy-delay-mmc-hs400es = <0x40 0x7f 0x2d 0x2d>;
+	sprd,phy-delay-mmc-hs400 = <0x3f 0xdf 0x2f 0x2f>;
+	sprd,phy-delay-mmc-hs200 = <0x7f 0xde 0xd4 0xd4>;
+	sprd,phy-delay-mmc-ddr52 = <0x3e 0x37 0x24 0x24>;
+	sprd,phy-delay-mmc-highspeed = <0x60 0x30 0x30 0x30>;
 };
 
 /* SC2730 PMIC via ADI bus */
@@ -106,24 +207,30 @@
 		regulators {
 			dcdc_core: dcdc-core {
 				regulator-name = "vddcore";
-				regulator-min-microvolt = <600000>;
-				regulator-max-microvolt = <1150000>;
 				regulator-boot-on;
 				regulator-always-on;
 			};
 
 			dcdc_cpu: dcdc-cpu {
 				regulator-name = "vddcpu";
-				regulator-min-microvolt = <600000>;
-				regulator-max-microvolt = <1150000>;
 				regulator-boot-on;
 				regulator-always-on;
 			};
 
 			dcdc_mem: dcdc-mem {
 				regulator-name = "vddmem";
-				regulator-min-microvolt = <600000>;
-				regulator-max-microvolt = <1150000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			dcdc_memq: dcdc-memq {
+				regulator-name = "vddmemq";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			dcdc_sram: dcdc-sram {
+				regulator-name = "vddsram";
 				regulator-boot-on;
 				regulator-always-on;
 			};
@@ -136,6 +243,36 @@
 
 			dcdc_gen1: dcdc-gen1 {
 				regulator-name = "vddgen1";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			ldo_avdd12: ldo-avdd12 {
+				regulator-name = "avdd12";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			ldo_avdd18: ldo-avdd18 {
+				regulator-name = "avdd18";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			ldo_vdd18_dcxo: ldo-vdd18-dcxo {
+				regulator-name = "vdd18-dcxo";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			ldo_vdd28: ldo-vdd28 {
+				regulator-name = "vdd28";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			ldo_vddusb33: ldo-vddusb33 {
+				regulator-name = "vddusb33";
 				regulator-boot-on;
 				regulator-always-on;
 			};
