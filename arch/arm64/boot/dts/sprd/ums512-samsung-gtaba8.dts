@@ -10,9 +10,11 @@
 
 #include <dt-bindings/clock/sprd,ums512-clk.h>
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/gpio-keys.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include "ums512.dtsi"
+#include "sc2730.dtsi"
 
 / {
 	model = "Samsung Galaxy Tab A8 10.5 (2021)";
@@ -157,6 +159,41 @@
 			no-map;
 		};
 	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		key-power {
+			label = "Power Key";
+			gpios = <&pmic_eic 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_POWER>;
+			wakeup-source;
+			debounce-interval = <2>;
+		};
+
+		key-volumeup {
+			label = "Volume Up Key";
+			gpios = <&ap_gpio 125 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			wakeup-source;
+			debounce-interval = <2>;
+		};
+
+		key-volumedown {
+			label = "Volume Down Key";
+			gpios = <&pmic_eic 4 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_VOLUMEDOWN>;
+			wakeup-source;
+			debounce-interval = <2>;
+		};
+	};
+
+	usb_otg_vbus: regulator-vbus {
+		compatible = "regulator-fixed";
+		regulator-name = "usb-otg-vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+	};
 };
 
 &uart0 {
@@ -167,24 +204,38 @@
 	status = "okay";
 };
 
-/* MicroSD Card (disabled during core/USB bring-up) */
+/* MicroSD Card */
 &sdio0 {
-	status = "disabled";
+	status = "okay";
+	vmmc-supply = <&vddsdcore>;
+	vqmmc-supply = <&vddsdio>;
+	cd-gpios = <&eic_sync 19 GPIO_ACTIVE_LOW>;
 	bus-width = <4>;
+	voltage-ranges = <3000 3000>;
+	sprd,phy-delay-sd-uhs-sdr104 = <0x7f 0x73 0x72 0x72>;
+	sprd,phy-delay-sd-uhs-sdr50 = <0x6e 0x7f 0x01 0x01>;
+	sprd,phy-delay-sd-highspeed = <0x7f 0x53 0xc4 0xc4>;
+	sprd,phy-delay-legacy = <0x7f 0x1a 0x9a 0x9a>;
+	sd-uhs-sdr104;
+	sd-uhs-sdr50;
 	no-sdio;
 	no-mmc;
-	broken-cd;
 };
 
 /* Internal eMMC (boot device) */
 &sdio3 {
 	status = "okay";
-	vmmc-supply = <&ldo_vddemmccore>;
+	vmmc-supply = <&vddemmccore>;
 	bus-width = <8>;
+	voltage-ranges = <3000 3000>;
 	non-removable;
 	cap-mmc-hw-reset;
 	no-sd;
 	no-sdio;
+	mmc-hs400-enhanced-strobe;
+	mmc-hs400-1_8v;
+	mmc-hs200-1_8v;
+	mmc-ddr-1_8v;
 	sprd,phy-delay-mmc-hs400es = <0x40 0x7f 0x2d 0x2d>;
 	sprd,phy-delay-mmc-hs400 = <0x3f 0xdf 0x2f 0x2f>;
 	sprd,phy-delay-mmc-hs200 = <0x7f 0xde 0xd4 0xd4>;
@@ -192,107 +243,18 @@
 	sprd,phy-delay-mmc-highspeed = <0x60 0x30 0x30 0x30>;
 };
 
-/* SC2730 PMIC via ADI bus */
-&adi_bus {
-	sc2730_pmic: pmic@0 {
-		compatible = "sprd,sc2730";
-		reg = <0>;
-		spi-max-frequency = <26000000>;
-		interrupts = <GIC_SPI 173 IRQ_TYPE_LEVEL_HIGH>;
-		interrupt-controller;
-		#interrupt-cells = <1>;
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		regulators {
-			dcdc_core: dcdc-core {
-				regulator-name = "vddcore";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			dcdc_cpu: dcdc-cpu {
-				regulator-name = "vddcpu";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			dcdc_mem: dcdc-mem {
-				regulator-name = "vddmem";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			dcdc_memq: dcdc-memq {
-				regulator-name = "vddmemq";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			dcdc_sram: dcdc-sram {
-				regulator-name = "vddsram";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			dcdc_gen0: dcdc-gen0 {
-				regulator-name = "vddgen0";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			dcdc_gen1: dcdc-gen1 {
-				regulator-name = "vddgen1";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			ldo_avdd12: ldo-avdd12 {
-				regulator-name = "avdd12";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			ldo_avdd18: ldo-avdd18 {
-				regulator-name = "avdd18";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			ldo_vdd18_dcxo: ldo-vdd18-dcxo {
-				regulator-name = "vdd18-dcxo";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			ldo_vdd28: ldo-vdd28 {
-				regulator-name = "vdd28";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			ldo_vddusb33: ldo-vddusb33 {
-				regulator-name = "vddusb33";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			ldo_vddemmccore: ldo-vddemmccore {
-				regulator-name = "vddemmccore";
-				regulator-boot-on;
-				regulator-always-on;
-			};
-		};
-	};
-};
-
-/* USB2 PHY & MUSB peripheral mode for ConfigFS ECM + ACM */
+/* USB2 PHY & MUSB peripheral mode for ConfigFS RNDIS + ACM */
 &hsphy {
 	status = "okay";
-	phy-supply = <&ldo_vddusb33>;
+	phy-supply = <&vddusb33>;
 };
 
 &usb {
 	status = "okay";
 	dr_mode = "peripheral";
+};
+
+/* Bring-up: AP watchdog off (PMIC sc27xx_wdt handles bootloader-armed watchdog) */
+&ap_wdt {
+	status = "disabled";
 };
