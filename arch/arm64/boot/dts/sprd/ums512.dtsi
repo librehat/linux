@@ -267,6 +267,14 @@
 				reg = <0x0 0x100>;
 				#clock-cells = <1>;
 			};
+
+			hsphy: phy@100 {
+				compatible = "sprd,ums512-hsphy";
+				reg = <0x100 0x2000>;
+				sprd,syscon-aon-apb = <&aon_apb_regs>;
+				#phy-cells = <0>;
+				status = "disabled";
+			};
 		};
 
 		anlg_phy_g3_regs: syscon@323c0000 {
@@ -821,6 +829,16 @@
 			};
 		};
 
+		usb: usb@5fff0000 {
+			compatible = "sprd,ums512-musb", "sprd,musb";
+			reg = <0 0x5fff0000 0 0x2000>;
+			interrupts = <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "mc";
+			clocks = <&aonapb_gate CLK_OTG_UTMI_EB>;
+			phys = <&hsphy>;
+			status = "disabled";
+		};
+
 		apb@70000000 {
 			compatible = "simple-bus";
 			#address-cells = <1>;
@@ -832,7 +850,10 @@
 					     "sprd,sc9836-uart";
 				reg = <0x0 0x100>;
 				interrupts = <GIC_SPI 2 IRQ_TYPE_LEVEL_HIGH>;
-				clocks = <&ext_26m>;
+				clocks = <&apapb_gate CLK_UART0_EB>,
+					 <&ap_clk CLK_AP_UART0>,
+					 <&ext_26m>;
+				clock-names = "enable", "uart", "source";
 				status = "disabled";
 			};
 
@@ -841,7 +862,10 @@
 					     "sprd,sc9836-uart";
 				reg = <0x100000 0x100>;
 				interrupts = <GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>;
-				clocks = <&ext_26m>;
+				clocks = <&apapb_gate CLK_UART1_EB>,
+					 <&ap_clk CLK_AP_UART1>,
+					 <&ext_26m>;
+				clock-names = "enable", "uart", "source";
 				status = "disabled";
 			};
 
