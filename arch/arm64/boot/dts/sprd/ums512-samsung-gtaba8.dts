@@ -1,0 +1,150 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+/*
+ * Samsung Galaxy Tab A8 10.5 (2021) - SM-X200 (Wi-Fi) / SM-X205 (LTE)
+ * Unisoc UMS512 / Tiger T618 SoC
+ *
+ * Board Device Tree for Nura Edge / Mainline Linux
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include "ums512.dtsi"
+
+/ {
+	model = "Samsung Galaxy Tab A8 10.5 (2021)";
+	compatible = "samsung,gtaba8", "sprd,ums512";
+
+	/*
+	 * Stock Samsung LK inspects sprd,sc-id. Must NOT match the stock DTBO id
+	 * (0x1100), otherwise LK will attempt to merge downstream 4.14 vendor overlays
+	 * onto the mainline Devicetree and hang early in boot.
+	 */
+	sprd,sc-id = "ums512 1000 1000";
+
+	aliases {
+		serial0 = &uart0;
+		serial1 = &uart1;
+		mmc0 = &sdio3;
+		mmc1 = &sdio0;
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x00 0x80000000 0x00 0xbffff000>;
+	};
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		stdout-path = "serial1:115200n8";
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* Bootloader splash framebuffer at 0x9e000000 (1200x1920 @ 32bpp) */
+		framebuffer_region: framebuffer@9e000000 {
+			reg = <0x00 0x9e000000 0x00 0x009e4000>;
+			no-map;
+		};
+
+		/* Ramoops / pstore persistent crash log buffer */
+		ramoops: ramoops@fff80000 {
+			compatible = "ramoops";
+			reg = <0x00 0xfff80000 0x00 0x00080000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x20000>;
+		};
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&uart1 {
+	status = "okay";
+};
+
+/* MicroSD Card */
+&sdio0 {
+	status = "okay";
+	bus-width = <4>;
+	no-sdio;
+	no-mmc;
+	broken-cd;
+};
+
+/* Internal eMMC (boot device) */
+&sdio3 {
+	status = "okay";
+	bus-width = <8>;
+	non-removable;
+	cap-mmc-hw-reset;
+	no-sd;
+	no-sdio;
+};
+
+/* SC2730 PMIC via ADI bus */
+&adi_bus {
+	sc2730_pmic: pmic@0 {
+		compatible = "sprd,sc2730";
+		reg = <0>;
+		spi-max-frequency = <26000000>;
+		interrupts = <GIC_SPI 173 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-controller;
+		#interrupt-cells = <1>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		regulators {
+			dcdc_core: dcdc-core {
+				regulator-name = "vddcore";
+				regulator-min-microvolt = <600000>;
+				regulator-max-microvolt = <1150000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			dcdc_cpu: dcdc-cpu {
+				regulator-name = "vddcpu";
+				regulator-min-microvolt = <600000>;
+				regulator-max-microvolt = <1150000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			dcdc_mem: dcdc-mem {
+				regulator-name = "vddmem";
+				regulator-min-microvolt = <600000>;
+				regulator-max-microvolt = <1150000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			dcdc_gen0: dcdc-gen0 {
+				regulator-name = "vddgen0";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			dcdc_gen1: dcdc-gen1 {
+				regulator-name = "vddgen1";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			ldo_vddemmccore: ldo-vddemmccore {
+				regulator-name = "vddemmccore";
+				regulator-boot-on;
+				regulator-always-on;
+			};
+		};
+	};
+};
