@@ -249,6 +249,14 @@ static int sprd_pmic_probe(struct spi_device *spi)
 		return ret;
 	}
 
+	/*
+	 * The PMIC and its MFD children never do DMA. Give the SPI device a
+	 * zero DMA mask so the children inherit a valid (empty) mask instead
+	 * of triggering "DMA mask not set" warnings in of_dma_configure().
+	 */
+	spi->dev.coherent_dma_mask = 0;
+	spi->dev.dma_mask = &spi->dev.coherent_dma_mask;
+
 	ret = devm_mfd_add_devices(&spi->dev, PLATFORM_DEVID_AUTO,
 				   cells, num_cells, NULL, 0,
 				   regmap_irq_get_domain(ddata->irq_data));
