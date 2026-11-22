@@ -10,6 +10,7 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/regulator/consumer.h>
 #include <linux/usb/role.h>
 #include "musb_core.h"
 #include "sprd_dma.h"
@@ -21,13 +22,17 @@ struct sprd_glue {
 	struct phy *phy;
 	struct clk *clk;
 	enum usb_role role;
+	enum usb_role role_suspended;
 	struct usb_role_switch *role_sw;
+	struct regulator *vbus;
 };
 
 static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 {
 	struct musb *musb = glue->musb;
-	u8 devctl;
+	unsigned long flags;
+	u8 devctl, power;
+	int ret;
 
 	if (role == glue->role)
 		return 0;
@@ -35,6 +40,18 @@ static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 	devctl = musb_readb(musb->mregs, MUSB_DEVCTL);
 
 	if (glue->role != USB_ROLE_NONE) {
+		/*
+		 * Leaving host role: tell the root hub the port lost its
+		 * connection. Detach may be signalled out of band by a TCPM,
+		 * so the controller may not raise a disconnect IRQ on its own.
+		 */
+		if (glue->role == USB_ROLE_HOST) {
+			spin_lock_irqsave(&musb->lock, flags);
+			if (musb->port1_status & USB_PORT_STAT_ENABLE)
+				musb_root_disconnect(musb);
+			spin_unlock_irqrestore(&musb->lock, flags);
+		}
+
 		/* force disconnect */
 		musb->is_active = 0;
 		devctl &= ~MUSB_DEVCTL_SESSION;
@@ -42,17 +59,28 @@ static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 		phy_power_off(glue->phy);
 		/* wait for disconnect event */
 		msleep(20);
+		/* drop VBUS if we were sourcing it as host */
+		if (glue->role == USB_ROLE_HOST && glue->vbus)
+			regulator_disable(glue->vbus);
 	}
 
 	switch (role) {
 	case USB_ROLE_HOST:
-		musb->is_active = 1;
+		if (glue->vbus) {
+			ret = regulator_enable(glue->vbus);
+			if (ret)
+				dev_err(glue->dev,
+					"failed to enable vbus: %d\n", ret);
+		}
 		musb_set_state(musb, OTG_STATE_A_IDLE);
 		MUSB_HST_MODE(musb);
-		devctl |= MUSB_DEVCTL_SESSION;
-		musb_writeb(musb->mregs, MUSB_DEVCTL, devctl);
 		phy_power_on(glue->phy);
 		phy_set_mode(glue->phy, PHY_MODE_USB_HOST);
+		musb_start(musb);
+		musb->is_active = 1;
+		musb_writeb(musb->mregs, MUSB_DEVCTL,
+			    musb_readb(musb->mregs, MUSB_DEVCTL) |
+			    MUSB_DEVCTL_SESSION);
 		break;
 	case USB_ROLE_DEVICE:
 		MUSB_DEV_MODE(musb);
@@ -60,7 +88,8 @@ static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 		phy_set_mode(glue->phy, PHY_MODE_USB_DEVICE);
 		/*
 		 * UMS512 PHY force-asserts VBUS with no session edge, so start
-		 * the controller and assert peripheral session + D+ pullup.
+		 * the controller and assert peripheral session. Only assert the
+		 * D+ pullup once a gadget driver has enabled softconnect.
 		 */
 		musb_start(musb);
 		musb->is_active = 1;
@@ -68,9 +97,11 @@ static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 		musb_writeb(musb->mregs, MUSB_DEVCTL,
 			    musb_readb(musb->mregs, MUSB_DEVCTL) |
 			    MUSB_DEVCTL_SESSION);
-		musb_writeb(musb->mregs, MUSB_POWER,
-			    musb_readb(musb->mregs, MUSB_POWER) |
-			    MUSB_POWER_HSENAB | MUSB_POWER_SOFTCONN);
+		power = musb_readb(musb->mregs, MUSB_POWER) |
+			MUSB_POWER_HSENAB;
+		if (musb->softconnect)
+			power |= MUSB_POWER_SOFTCONN;
+		musb_writeb(musb->mregs, MUSB_POWER, power);
 		break;
 	case USB_ROLE_NONE:
 	default:
@@ -312,6 +343,18 @@ static int sprd_musb_probe(struct platform_device *pdev)
 			"failed to get phy\n");
 	}
 
+	/*
+	 * Optional VBUS supply for host mode. On boards with a TCPM the PD
+	 * block drives VBUS instead, so absence is not an error.
+	 */
+	glue->vbus = devm_regulator_get_optional(dev, "vbus");
+	if (IS_ERR(glue->vbus)) {
+		ret = PTR_ERR(glue->vbus);
+		if (ret == -EPROBE_DEFER)
+			return dev_err_probe(dev, ret, "failed to get vbus\n");
+		glue->vbus = NULL;
+	}
+
 	platform_set_drvdata(pdev, glue);
 
 	ret = clk_prepare_enable(glue->clk);
@@ -349,6 +392,39 @@ static void sprd_musb_remove(struct platform_device *pdev)
 	platform_device_unregister(glue->musb_pdev);
 }
 
+/*
+ * Leaving the phy powered and the session asserted across suspend keeps the SoC
+ * out of deep sleep. Drop the role for the duration of suspend and restore it
+ * on resume.
+ */
+static int sprd_musb_suspend(struct device *dev)
+{
+	struct sprd_glue *glue = dev_get_drvdata(dev);
+
+	if (!glue->musb || glue->role == USB_ROLE_NONE)
+		return 0;
+
+	glue->role_suspended = glue->role;
+
+	return sprd_otg_switch_set(glue, USB_ROLE_NONE);
+}
+
+static int sprd_musb_resume(struct device *dev)
+{
+	struct sprd_glue *glue = dev_get_drvdata(dev);
+	enum usb_role role = glue->role_suspended;
+
+	if (role == USB_ROLE_NONE)
+		return 0;
+
+	glue->role_suspended = USB_ROLE_NONE;
+
+	return sprd_otg_switch_set(glue, role);
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(sprd_musb_pm_ops, sprd_musb_suspend,
+				sprd_musb_resume);
+
 #ifdef CONFIG_OF
 static const struct of_device_id sprd_musb_match[] = {
 	{ .compatible = "sprd,musb" },
@@ -362,6 +438,7 @@ static struct platform_driver sprd_musb_driver = {
 	.remove = sprd_musb_remove,
 	.driver = {
 		   .name = "musb-sprd",
+		   .pm = pm_sleep_ptr(&sprd_musb_pm_ops),
 		   .of_match_table = of_match_ptr(sprd_musb_match),
 	},
 };
