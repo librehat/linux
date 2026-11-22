@@ -2762,7 +2762,11 @@ int musb_host_setup(struct musb *musb, int power_budget)
 	if (ret < 0)
 		return ret;
 
-	device_wakeup_enable(hcd->self.controller);
+	/*
+	 * Advertise wakeup capability but leave it switched off so MUSB_OTG
+	 * does not unconditionally arm enable_irq_wake() on suspend.
+	 */
+	device_set_wakeup_capable(hcd->self.controller, true);
 	return 0;
 }
 
