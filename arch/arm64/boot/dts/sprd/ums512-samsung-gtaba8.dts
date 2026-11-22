@@ -167,9 +167,9 @@
 	status = "okay";
 };
 
-/* MicroSD Card */
+/* MicroSD Card (disabled during core/USB bring-up) */
 &sdio0 {
-	status = "okay";
+	status = "disabled";
 	bus-width = <4>;
 	no-sdio;
 	no-mmc;
@@ -284,4 +284,15 @@
 			};
 		};
 	};
+};
+
+/* USB2 PHY & MUSB peripheral mode for ConfigFS ECM + ACM */
+&hsphy {
+	status = "okay";
+	phy-supply = <&ldo_vddusb33>;
+};
+
+&usb {
+	status = "okay";
+	dr_mode = "peripheral";
 };
