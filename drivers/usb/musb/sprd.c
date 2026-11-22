@@ -208,7 +208,7 @@ static int sprd_musb_exit(struct musb *musb)
 }
 
 static const struct musb_platform_ops sprd_musb_ops = {
-	.quirks = MUSB_DMA_SPRD,
+	.quirks = MUSB_DMA_SPRD | MUSB_G_NO_SKB_RESERVE,
 	.init = sprd_musb_init,
 	.exit = sprd_musb_exit,
 	.dma_init = sprd_musb_dma_controller_create,
