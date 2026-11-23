@@ -7,6 +7,7 @@
 
 #include <dt-bindings/clock/sprd,ums512-clk.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/power/sprd,ums512-power.h>
 
 / {
 	interrupt-parent = <&gic>;
@@ -174,6 +175,37 @@
 		interrupts = <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 119 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-affinity = <&CPU6>, <&CPU7>;
+	};
+
+	disp: display-subsystem {
+		compatible = "sprd,display-subsystem";
+		ports = <&dpu_port>;
+		status = "disabled";
+	};
+
+	gpu_opp_table: opp-table-gpu {
+		compatible = "operating-points-v2";
+
+		opp-384000000 {
+			opp-hz = /bits/ 64 <384000000>;
+			opp-microvolt = <700000>;
+		};
+		opp-512000000 {
+			opp-hz = /bits/ 64 <512000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-614400000 {
+			opp-hz = /bits/ 64 <614400000>;
+			opp-microvolt = <750000>;
+		};
+		opp-768000000 {
+			opp-hz = /bits/ 64 <768000000>;
+			opp-microvolt = <800000>;
+		};
+		opp-850000000 {
+			opp-hz = /bits/ 64 <850000000>;
+			opp-microvolt = <800000>;
+		};
 	};
 
 	soc: soc {
@@ -427,6 +459,23 @@
 				clock-names = "ext-26m";
 				#clock-cells = <1>;
 			};
+
+			pmu: power-controller {
+				compatible = "sprd,ums512-power-controller";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#power-domain-cells = <1>;
+
+				power-domain@UMS512_POWER_DOMAIN_GPU_TOP {
+					reg = <UMS512_POWER_DOMAIN_GPU_TOP>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@UMS512_POWER_DOMAIN_MM {
+					reg = <UMS512_POWER_DOMAIN_MM>;
+					#power-domain-cells = <0>;
+				};
+			};
 		};
 
 		audcp_apb_regs: syscon@3350d000 {
@@ -469,8 +518,9 @@
 
 			gpu_clk: clock-controller@0 {
 				compatible = "sprd,ums512-gpu-clk";
-				clocks = <&ext_26m>;
-				clock-names = "ext-26m";
+				clocks = <&aonapb_gate CLK_GPU_EB>, <&ext_26m>;
+				clock-names = "enable", "ext-26m";
+				power-domains = <&pmu UMS512_POWER_DOMAIN_GPU_TOP>;
 				reg = <0x0 0x100>;
 				#clock-cells = <1>;
 			};
@@ -493,6 +543,9 @@
 			mm_gate: clock-controller@0 {
 				compatible = "sprd,ums512-mm-gate-clk";
 				reg = <0x0 0x3000>;
+				clocks = <&aonapb_gate CLK_MM_EB>;
+				clock-names = "enable";
+				power-domains = <&pmu UMS512_POWER_DOMAIN_MM>;
 				#clock-cells = <1>;
 			};
 		};
@@ -520,6 +573,60 @@
 			#clock-cells = <1>;
 		};
 
+		dpu: dpu@20300000 {
+			compatible = "sprd,ums512-dpu", "sprd,sharkl3-dpu";
+			reg = <0 0x20300000 0 0x800>;
+			interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&apahb_gate CLK_DISPC_EB>,
+				 <&ap_clk CLK_DISPC0_DPI>;
+			clock-names = "core", "dpi";
+			iommus = <&iommu_disp>;
+			status = "disabled";
+
+			dpu_port: port {
+				dpu_out: endpoint {
+					remote-endpoint = <&dsi_in>;
+				};
+			};
+		};
+
+		iommu_disp: iommu@20300800 {
+			compatible = "sprd,iommu-v1";
+			reg = <0 0x20300800 0 0x80>;
+			#iommu-cells = <0>;
+			clocks = <&apahb_gate CLK_DISPC_EB>;
+			sprd,iova-range = <0x90000000 0x10000000>;
+			status = "disabled";
+		};
+
+		dsi: dsi@20400000 {
+			compatible = "sprd,ums512-dsi-host";
+			reg = <0 0x20400000 0 0x1000>;
+			interrupts = <GIC_SPI 30 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 31 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&apahb_gate CLK_DSI_EB>;
+			clock-names = "pclk";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					dsi_in: endpoint {
+						remote-endpoint = <&dpu_out>;
+					};
+				};
+
+				dsi_port: port@1 {
+					reg = <1>;
+				};
+			};
+		};
+
 		aon_clk: clock-controller@32080000 {
 			compatible = "sprd,ums512-aonapb-clk";
 			reg = <0 0x32080000 0 0x1000>;
@@ -533,8 +640,9 @@
 		mm_clk: clock-controller@62100000 {
 			compatible = "sprd,ums512-mm-clk";
 			reg = <0 0x62100000 0 0x1000>;
-			clocks = <&ext_26m>;
-			clock-names = "ext-26m";
+			clocks = <&aonapb_gate CLK_MM_EB>, <&ext_26m>;
+			clock-names = "enable", "ext-26m";
+			power-domains = <&pmu UMS512_POWER_DOMAIN_MM>;
 			#clock-cells = <1>;
 		};
 
@@ -914,6 +1022,22 @@
 			interrupt-names = "mc";
 			clocks = <&aonapb_gate CLK_OTG_UTMI_EB>;
 			phys = <&hsphy>;
+			status = "disabled";
+		};
+
+		gpu: gpu@60000000 {
+			compatible = "sprd,ums512-mali", "arm,mali-bifrost";
+			reg = <0 0x60000000 0 0x100000>;
+			interrupts = <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "job", "mmu", "gpu";
+			clocks = <&gpu_clk CLK_GPU_CORE_EB>,
+				 <&gpu_clk CLK_GPU_MEM_EB>,
+				 <&gpu_clk CLK_GPU_SYS_EB>;
+			clock-names = "gpu", "mem", "bus";
+			operating-points-v2 = <&gpu_opp_table>;
+			power-domains = <&pmu UMS512_POWER_DOMAIN_GPU_TOP>;
 			status = "disabled";
 		};
 
