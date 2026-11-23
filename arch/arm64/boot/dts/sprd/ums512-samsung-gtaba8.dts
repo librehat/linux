@@ -256,6 +256,25 @@
 	dr_mode = "peripheral";
 };
 
+/* Novatek NT36523B TDDI Touchscreen on SPI2 (0x70a00000 CS 1) */
+&spi2 {
+	status = "okay";
+
+	touchscreen@1 {
+		compatible = "novatek,NVT-ts-spi-a8";
+		reg = <1>;
+		spi-max-frequency = <9600000>;
+		novatek,swrst-n8-addr = <0x0003f0fe>;
+		novatek,spi-rd-fast-addr = <0x0003f310>;
+		novatek,resolution = <1200 1920>;
+		novatek,area-size = <0x38 0x70 0x3c>;
+		novatek,max_touch_num = <10>;
+		novatek,reset-gpio = <&ap_gpio 145 GPIO_ACTIVE_HIGH>;
+		novatek,irq-gpio = <&eic_async 0 IRQ_TYPE_EDGE_RISING>;
+		novatek,fw_name = "nt36523b_qc_inx_fw.bin";
+	};
+};
+
 /*
  * Native KMS on UMS512 DPU r4p0: adopts the bootloader-initialised MIPI-DSI
  * video link (works across all SM-X200 panel vendors) and owns the 4-plane
