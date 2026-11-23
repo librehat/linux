@@ -401,60 +401,6 @@ static struct sprd_clk_desc ums512_gc_pll_desc = {
 	.hw_clks	= &ums512_gc_pll_hws,
 };
 
-/* ap ahb gates */
-static SPRD_SC_GATE_CLK_FW_NAME(dsi_eb, "dsi-eb", "ext-26m",
-				0x0, 0x1000, BIT(0), 0, 0);
-static SPRD_SC_GATE_CLK_FW_NAME(dispc_eb, "dispc-eb", "ext-26m",
-				0x0, 0x1000, BIT(1), 0, 0);
-static SPRD_SC_GATE_CLK_FW_NAME(vsp_eb, "vsp-eb", "ext-26m",
-				0x0, 0x1000, BIT(2), 0, 0);
-static SPRD_SC_GATE_CLK_FW_NAME(vdma_eb, "vdma-eb", "ext-26m",
-				0x0, 0x1000, BIT(3), 0, 0);
-static SPRD_SC_GATE_CLK_FW_NAME(dma_pub_eb, "dma-pub-eb", "ext-26m",
-				0x0, 0x1000, BIT(4), 0, 0);
-static SPRD_SC_GATE_CLK_FW_NAME(dma_sec_eb, "dma-sec-eb", "ext-26m",
-				0x0, 0x1000, BIT(5), 0, 0);
-static SPRD_SC_GATE_CLK_FW_NAME(ipi_eb, "ipi-eb", "ext-26m",
-				0x0, 0x1000, BIT(6), 0, 0);
-static SPRD_SC_GATE_CLK_FW_NAME(ahb_ckg_eb, "ahb-ckg-eb", "ext-26m",
-				0x0, 0x1000, BIT(7), CLK_IGNORE_UNUSED, 0);
-static SPRD_SC_GATE_CLK_FW_NAME(bm_clk_eb, "bm-clk-eb", "ext-26m",
-				0x0, 0x1000, BIT(8), CLK_IGNORE_UNUSED, 0);
-
-static struct sprd_clk_common *ums512_apahb_gate[] = {
-	/* address base is 0x20100000 */
-	&dsi_eb.common,
-	&dispc_eb.common,
-	&vsp_eb.common,
-	&vdma_eb.common,
-	&dma_pub_eb.common,
-	&dma_sec_eb.common,
-	&ipi_eb.common,
-	&ahb_ckg_eb.common,
-	&bm_clk_eb.common,
-};
-
-static struct clk_hw_onecell_data ums512_apahb_gate_hws = {
-	.hws	= {
-		[CLK_DSI_EB]		= &dsi_eb.common.hw,
-		[CLK_DISPC_EB]		= &dispc_eb.common.hw,
-		[CLK_VSP_EB]		= &vsp_eb.common.hw,
-		[CLK_VDMA_EB]		= &vdma_eb.common.hw,
-		[CLK_DMA_PUB_EB]	= &dma_pub_eb.common.hw,
-		[CLK_DMA_SEC_EB]	= &dma_sec_eb.common.hw,
-		[CLK_IPI_EB]		= &ipi_eb.common.hw,
-		[CLK_AHB_CKG_EB]	= &ahb_ckg_eb.common.hw,
-		[CLK_BM_CLK_EB]		= &bm_clk_eb.common.hw,
-	},
-	.num	= CLK_AP_AHB_GATE_NUM,
-};
-
-static struct sprd_clk_desc ums512_apahb_gate_desc = {
-	.clk_clks	= ums512_apahb_gate,
-	.num_clk_clks	= ARRAY_SIZE(ums512_apahb_gate),
-	.hw_clks	= &ums512_apahb_gate_hws,
-};
-
 /* ap clks */
 static const struct clk_parent_data ap_apb_parents[] = {
 	{ .fw_name = "ext-26m" },
@@ -602,10 +548,64 @@ static SPRD_MUX_CLK_DATA(dsi_apb_clk, "dsi-apb-clk", dsi_apb_parents,
 			 0xa4, 0, 2, UMS512_MUX_FLAG);
 
 static SPRD_GATE_CLK_FW_NAME(dsi_rxesc, "dsi-rxesc", "ext-26m",
-			     0xa8, BIT(16), 0, 0);
+			     0xa8, BIT(16), CLK_IGNORE_UNUSED, 0);
 
 static SPRD_GATE_CLK_FW_NAME(dsi_lanebyte, "dsi-lanebyte", "ext-26m",
-			     0xac, BIT(16), 0, 0);
+			     0xac, BIT(16), CLK_IGNORE_UNUSED, 0);
+
+/* ap ahb gates */
+static SPRD_SC_GATE_CLK_HW(dsi_eb, "dsi-eb", &dsi_apb_clk.common.hw,
+			   0x0, 0x1000, BIT(0), 0, 0);
+static SPRD_SC_GATE_CLK_HW(dispc_eb, "dispc-eb", &dispc0_clk.common.hw,
+			   0x0, 0x1000, BIT(1), 0, 0);
+static SPRD_SC_GATE_CLK_HW(vsp_eb, "vsp-eb", &vsp_clk.common.hw,
+			   0x0, 0x1000, BIT(2), 0, 0);
+static SPRD_SC_GATE_CLK_FW_NAME(vdma_eb, "vdma-eb", "ext-26m",
+				0x0, 0x1000, BIT(3), 0, 0);
+static SPRD_SC_GATE_CLK_FW_NAME(dma_pub_eb, "dma-pub-eb", "ext-26m",
+				0x0, 0x1000, BIT(4), 0, 0);
+static SPRD_SC_GATE_CLK_FW_NAME(dma_sec_eb, "dma-sec-eb", "ext-26m",
+				0x0, 0x1000, BIT(5), 0, 0);
+static SPRD_SC_GATE_CLK_FW_NAME(ipi_eb, "ipi-eb", "ext-26m",
+				0x0, 0x1000, BIT(6), 0, 0);
+static SPRD_SC_GATE_CLK_FW_NAME(ahb_ckg_eb, "ahb-ckg-eb", "ext-26m",
+				0x0, 0x1000, BIT(7), CLK_IGNORE_UNUSED, 0);
+static SPRD_SC_GATE_CLK_FW_NAME(bm_clk_eb, "bm-clk-eb", "ext-26m",
+				0x0, 0x1000, BIT(8), CLK_IGNORE_UNUSED, 0);
+
+static struct sprd_clk_common *ums512_apahb_gate[] = {
+	/* address base is 0x20100000 */
+	&dsi_eb.common,
+	&dispc_eb.common,
+	&vsp_eb.common,
+	&vdma_eb.common,
+	&dma_pub_eb.common,
+	&dma_sec_eb.common,
+	&ipi_eb.common,
+	&ahb_ckg_eb.common,
+	&bm_clk_eb.common,
+};
+
+static struct clk_hw_onecell_data ums512_apahb_gate_hws = {
+	.hws	= {
+		[CLK_DSI_EB]		= &dsi_eb.common.hw,
+		[CLK_DISPC_EB]		= &dispc_eb.common.hw,
+		[CLK_VSP_EB]		= &vsp_eb.common.hw,
+		[CLK_VDMA_EB]		= &vdma_eb.common.hw,
+		[CLK_DMA_PUB_EB]	= &dma_pub_eb.common.hw,
+		[CLK_DMA_SEC_EB]	= &dma_sec_eb.common.hw,
+		[CLK_IPI_EB]		= &ipi_eb.common.hw,
+		[CLK_AHB_CKG_EB]	= &ahb_ckg_eb.common.hw,
+		[CLK_BM_CLK_EB]		= &bm_clk_eb.common.hw,
+	},
+	.num	= CLK_AP_AHB_GATE_NUM,
+};
+
+static struct sprd_clk_desc ums512_apahb_gate_desc = {
+	.clk_clks	= ums512_apahb_gate,
+	.num_clk_clks	= ARRAY_SIZE(ums512_apahb_gate),
+	.hw_clks	= &ums512_apahb_gate_hws,
+};
 
 static const struct clk_parent_data vdsp_parents[] = {
 	{ .hw = &twpll_256m.hw  },
@@ -1702,9 +1702,6 @@ static const struct sprd_clk_desc ums512_audcpahb_gate_desc = {
 };
 
 /* gpu clocks */
-static SPRD_GATE_CLK_HW(gpu_core_gate, "gpu-core-gate", &gpu_eb.common.hw,
-			0x4, BIT(0), 0, 0);
-
 static const struct clk_parent_data gpu_parents[] = {
 	{ .fw_name = "ext-26m" },
 	{ .hw = &twpll_384m.hw  },
@@ -1717,17 +1714,20 @@ static const struct clk_parent_data gpu_parents[] = {
 static SPRD_COMP_CLK_DATA(gpu_core_clk, "gpu-core-clk", gpu_parents,
 			  0x4, 4, 3, 8, 3, 0);
 
-static SPRD_GATE_CLK_HW(gpu_mem_gate, "gpu-mem-gate", &gpu_eb.common.hw,
-			0x8, BIT(0), 0, 0);
+static SPRD_GATE_CLK_HW(gpu_core_gate, "gpu-core-gate", &gpu_core_clk.common.hw,
+			0x4, BIT(0), CLK_SET_RATE_PARENT, 0);
 
 static SPRD_COMP_CLK_DATA(gpu_mem_clk, "gpu-mem-clk", gpu_parents,
 			  0x8, 4, 3, 8, 3, 0);
 
-static SPRD_GATE_CLK_HW(gpu_sys_gate, "gpu-sys-gate", &gpu_eb.common.hw,
-			0xc, BIT(0), 0, 0);
+static SPRD_GATE_CLK_HW(gpu_mem_gate, "gpu-mem-gate", &gpu_mem_clk.common.hw,
+			0x8, BIT(0), CLK_SET_RATE_PARENT, 0);
 
 static SPRD_DIV_CLK_HW(gpu_sys_clk, "gpu-sys-clk", &gpu_eb.common.hw,
 		       0xc, 4, 3, 0);
+
+static SPRD_GATE_CLK_HW(gpu_sys_gate, "gpu-sys-gate", &gpu_sys_clk.common.hw,
+			0xc, BIT(0), 0, 0);
 
 static struct sprd_clk_common *ums512_gpu_clk[] = {
 	/* address base is 0x60100000 */
