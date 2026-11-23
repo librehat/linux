@@ -13,6 +13,7 @@ properties:
   compatible:
     enum:
       - sprd,sharkl3-dsi-host
+      - sprd,ums512-dsi-host
       - sprd,ums9230-dsi-host
 
   reg:

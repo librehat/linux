@@ -3,6 +3,7 @@
  * Copyright (C) 2020 Unisoc Inc.
  */
 
+#include <linux/aperture.h>
 #include <linux/component.h>
 #include <linux/dma-mapping.h>
 #include <linux/iommu.h>
@@ -137,6 +138,9 @@ static int sprd_drm_bind(struct device *dev)
 		drm_err(drm, "failed to bind all component.\n");
 		return ret;
 	}
+
+	/* remove bootloader simple-framebuffer before registering KMS */
+	aperture_remove_all_conflicting_devices(DRIVER_NAME);
 
 	/*
 	 * FIXME: sprd_gem_prime_import_sg_table() manages the IOMMU mapping,
