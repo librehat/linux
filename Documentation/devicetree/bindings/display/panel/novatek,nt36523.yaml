@@ -26,9 +26,21 @@ properties:
           - enum:
               - lenovo,j606f-boe-nt36523w
           - const: novatek,nt36523w
+      - items:
+          - enum:
+              - samsung,gtaba8-inx-nt36523b
+          - const: novatek,nt36523b
 
   reg:
     maxItems: 1
+
+  avdd-gpios:
+    maxItems: 1
+    description: phandle of gpio for positive analog bias supply (AVDD/VSP)
+
+  avee-gpios:
+    maxItems: 1
+    description: phandle of gpio for negative analog bias supply (AVEE/VSN)
 
   reset-gpios:
     maxItems: 1
@@ -50,6 +62,7 @@ allOf:
         compatible:
           contains:
             enum:
+              - novatek,nt36523b
               - novatek,nt36523w
     then:
       properties:
