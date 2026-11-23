@@ -903,6 +903,9 @@ static const struct drm_bridge_funcs sprd_dsi_bridge_funcs = {
 	.atomic_enable		= sprd_dsi_bridge_enable,
 	.atomic_disable		= sprd_dsi_bridge_disable,
 	.atomic_post_disable	= sprd_dsi_bridge_post_disable,
+	.atomic_create_state	= drm_atomic_helper_bridge_create_state,
+	.atomic_duplicate_state	= drm_atomic_helper_bridge_duplicate_state,
+	.atomic_destroy_state	= drm_atomic_helper_bridge_destroy_state,
 };
 
 static int sprd_dsi_bridge_init(struct sprd_dsi *dsi,
