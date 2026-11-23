@@ -31,11 +31,9 @@ properties:
       - const: dpi
       - const: dsi
 
-  width-mm:
-    $ref: /schemas/types.yaml#/definitions/uint32
+  width-mm: true
 
-  height-mm:
-    $ref: /schemas/types.yaml#/definitions/uint32
+  height-mm: true
 
   sprd,boot-framebuffer:
     $ref: /schemas/types.yaml#/definitions/phandle
