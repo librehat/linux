@@ -2200,6 +2200,7 @@ void sdiohal_remove_card(void)
 	if (p_data->sdio_dev_host) {
 		/* enable remove the card */
 		p_data->sdio_dev_host->caps &= ~MMC_CAP_NONREMOVABLE;
+		p_data->sdio_dev_host->rescan_entered = 0;
 		mmc_detect_change(p_data->sdio_dev_host, 0);
 	}
 #else
@@ -2215,6 +2216,10 @@ void sdiohal_remove_card(void)
 	else
 		sdiohal_info("remove card end\n");
 
+#ifdef CONFIG_SPRD_BOARD
+	if (p_data->sdio_dev_host)
+		p_data->sdio_dev_host->caps |= MMC_CAP_NONREMOVABLE;
+#endif
 	sdio_unregister_driver(&sdiohal_driver);
 	sdiohal_unlock_scan_ws();
 }
@@ -2323,11 +2328,16 @@ int sdiohal_scan_card(void)
 #ifdef CONFIG_SPRD_BOARD
 	if (p_data->sdio_dev_host) {
 		p_data->sdio_dev_host->caps &= ~MMC_CAP_NONREMOVABLE;
+		p_data->sdio_dev_host->rescan_entered = 0;
 		mmc_detect_change(p_data->sdio_dev_host, 0);
 	}
 #endif
 	if (wait_for_completion_timeout(&p_data->scan_done,
 		msecs_to_jiffies(2500)) == 0) {
+#ifdef CONFIG_SPRD_BOARD
+		if (p_data->sdio_dev_host)
+			p_data->sdio_dev_host->caps |= MMC_CAP_NONREMOVABLE;
+#endif
 		sdiohal_unlock_scan_ws();
 		sdio_unregister_driver(&sdiohal_driver);
 		sdiohal_err("wait scan card time out\n");
