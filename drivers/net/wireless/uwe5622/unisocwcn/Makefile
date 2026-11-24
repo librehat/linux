@@ -2,7 +2,6 @@ PWD := $(shell pwd)
 CURFOLDER ?= $(pwd)
 
 LD_CFLAGS += -D__linux__
-EXTRA_CFLAGS=-fno-pic
 
 all_dependencies := driver
 driver_dependencies :=
@@ -78,6 +77,13 @@ ifeq ($(CONFIG_AW_WIFI_DEVICE_UWE5622),y)
 export CONFIG_WCN_SDIO = y
 #export CONFIG_WCN_USB = y
 #ccflags-y += -DCONFIG_CHECK_DRIVER_BY_CHIPID
+ccflags-y += -DCONFIG_UWE5622
+BSP_CHIP_ID := uwe5622
+WCN_HW_TYPE := sdio
+endif
+
+ifeq ($(CONFIG_SPRD_WIFI_DEVICE_UWE5622),y)
+export CONFIG_WCN_SDIO = y
 ccflags-y += -DCONFIG_UWE5622
 BSP_CHIP_ID := uwe5622
 WCN_HW_TYPE := sdio
@@ -331,6 +337,18 @@ ccflags-y += -DCONFIG_SDIO_INBAND_INT
 all_dependencies += install
 endif
 ### ---------- Allwinner end ---------- ###
+
+### ---------- Unisoc SPRD start ---------- ###
+ifeq ($(CONFIG_SPRD_WIFI_DEVICE_UWE5622),y)
+ccflags-y += -DCONFIG_SPRD_BOARD
+ccflags-y += -DCONFIG_WCN_PARSE_DTS
+ccflags-y += -DCONFIG_WCN_POWER_UP_DOWN
+ccflags-y += -DCONFIG_SDIO_TX_ADMA_MODE
+ccflags-y += -DCONFIG_SDIO_RX_ADMA_MODE
+ccflags-y += -DCONFIG_SDIO_INBAND_INT
+ccflags-y += -DCONFIG_SDIO_BLKSIZE_512
+endif
+### ---------- Unisoc SPRD end ---------- ###
 
 ifdef CONFIG_WCN_BSP_DRIVER_BUILDIN
 #

@@ -28,7 +28,9 @@ ccflags-y += -DATCMD_ASSERT
 ccflags-y += -DTCPACK_DELAY_SUPPORT
 ccflags-$(DEBUGMODE) += -DWL_CONFIG_DEBUG
 ccflags-y += -DSPLIT_STACK
+ifneq ($(CONFIG_SPRD_WIFI_DEVICE_UWE5622),y)
 ccflags-y += -DOTT_UWE
+endif
 ccflags-y += -DCP2_RESET_SUPPORT
 ifeq ($(UNISOC_STA_SOFTAP_SCC_MODE),y)
 ccflags-y += -DSTA_SOFTAP_SCC_MODE

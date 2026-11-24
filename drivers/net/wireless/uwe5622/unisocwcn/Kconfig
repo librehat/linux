@@ -89,6 +89,13 @@ config AW_WIFI_DEVICE_UWE5622
 	  please say "y".
 	  Thanks.
 
+config SPRD_WIFI_DEVICE_UWE5622
+	bool "Unisoc SPRD board support for uwe5622 (Marlin3-Lite)"
+	default n
+	help
+	  This enables support for Unisoc UWE5622 / Marlin3-Lite WCN chip on
+	  Unisoc (SPRD) SoCs such as UMS512.
+
 config AW_BIND_VERIFY
 	bool "allwinner wcn bind verify"
 	depends on AW_WIFI_DEVICE_UWE5622

@@ -35,8 +35,10 @@ int sprdwl_send_data(struct sprdwl_vif *vif, struct sprdwl_msg_buf *msg,
 		     struct sk_buff *skb, u8 offset)
 {
 	int ret;
+#ifdef OTT_UWE
 	int delta;
 	unsigned long align_addr;
+#endif
 	unsigned char *buf = NULL;
 	struct sprdwl_intf *intf;
 	unsigned int plen = cpu_to_le16(skb->len);

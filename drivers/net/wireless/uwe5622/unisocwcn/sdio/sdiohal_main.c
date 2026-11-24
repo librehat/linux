@@ -1290,8 +1290,40 @@ static int sdiohal_get_dev_func(struct sdio_func *func)
 }
 
 #ifdef CONFIG_WCN_PARSE_DTS
+#ifdef CONFIG_SPRD_BOARD
+static int sdiohal_match_mmc_host(struct device *dev, const void *data)
+{
+	return dev->class && !strcmp(dev->class->name, "mmc_host");
+}
+#endif
+
 static struct mmc_host *sdiohal_dev_get_host(struct device_node *np_node)
 {
+#ifdef CONFIG_SPRD_BOARD
+	struct platform_device *pdev;
+	struct device *child;
+	struct mmc_host *host_mmc;
+
+	if (!np_node)
+		return NULL;
+
+	pdev = of_find_device_by_node(np_node);
+	if (!pdev) {
+		sdiohal_err("sdio dev get platform device failed!!!");
+		return NULL;
+	}
+
+	child = device_find_child(&pdev->dev, NULL, sdiohal_match_mmc_host);
+	put_device(&pdev->dev);
+	if (!child) {
+		sdiohal_err("sdio dev get mmc_host child failed!!!");
+		return NULL;
+	}
+
+	host_mmc = container_of(child, struct mmc_host, class_dev);
+	put_device(child);
+	return host_mmc;
+#else
 	void *drv_data;
 	struct mmc_host *host_mmc;
 	struct platform_device *pdev;
@@ -1317,6 +1349,7 @@ static struct mmc_host *sdiohal_dev_get_host(struct device_node *np_node)
 		return host_mmc;
 	else
 		return container_of(drv_data, struct mmc_host, private);
+#endif
 }
 #endif
 
@@ -1327,7 +1360,13 @@ static int sdiohal_parse_dt(void)
 	struct device_node *np;
 	struct device_node *sdio_node;
 
+#ifdef CONFIG_SPRD_BOARD
+	np = of_find_compatible_node(NULL, NULL, "sprd,marlin3");
+	if (!np)
+		np = of_find_node_by_name(NULL, "uwe-bsp");
+#else
 	np = of_find_node_by_name(NULL, "uwe-bsp");
+#endif
 	if (!np) {
 		sdiohal_err("dts node not found");
 		return -1;
@@ -1441,6 +1480,10 @@ static int sdiohal_parse_dt(void)
 #endif
 
 	p_data->sdio_dev_host = sdiohal_dev_get_host(sdio_node);
+#ifdef CONFIG_SPRD_BOARD
+	of_node_put(sdio_node);
+	of_node_put(np);
+#endif
 	if (p_data->sdio_dev_host == NULL) {
 		sdiohal_err("get host failed!!!");
 		return -1;
@@ -2150,10 +2193,21 @@ void sdiohal_remove_card(void)
 	return;
 #endif
 
+#ifdef CONFIG_SPRD_BOARD
+	if (p_data->sdio_dev_host && p_data->sdio_dev_host->card)
+		p_data->sdio_dev_host->card->state |= WCN_SDIO_CARD_REMOVED;
+
+	if (p_data->sdio_dev_host) {
+		/* enable remove the card */
+		p_data->sdio_dev_host->caps &= ~MMC_CAP_NONREMOVABLE;
+		mmc_detect_change(p_data->sdio_dev_host, 0);
+	}
+#else
 	p_data->sdio_dev_host->card->state |= WCN_SDIO_CARD_REMOVED;
 
 	/* enable remove the card */
 	p_data->sdio_dev_host->caps &= ~MMC_CAP_NONREMOVABLE;
+#endif
 
 	if (wait_for_completion_timeout(&p_data->remove_done,
 					msecs_to_jiffies(5000)) == 0)
@@ -2266,6 +2320,12 @@ int sdiohal_scan_card(void)
 		sdiohal_err("sdio_register_driver error :%d\n", ret);
 		return ret;
 	}
+#ifdef CONFIG_SPRD_BOARD
+	if (p_data->sdio_dev_host) {
+		p_data->sdio_dev_host->caps &= ~MMC_CAP_NONREMOVABLE;
+		mmc_detect_change(p_data->sdio_dev_host, 0);
+	}
+#endif
 	if (wait_for_completion_timeout(&p_data->scan_done,
 		msecs_to_jiffies(2500)) == 0) {
 		sdiohal_unlock_scan_ws();

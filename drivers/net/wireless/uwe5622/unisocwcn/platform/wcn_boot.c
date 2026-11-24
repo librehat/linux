@@ -232,6 +232,7 @@ struct wcn_clock_info {
 };
 
 struct marlin_device {
+	struct device *dev;
 	struct wcn_clock_info clk_xtal_26m;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
 	struct gpio_desc *coexist;
@@ -256,6 +257,8 @@ struct marlin_device {
 	struct regulator *avdd18;
 	/* for wifi PA, BT TX RX */
 	struct regulator *avdd33;
+	/* for RF switch / front-end */
+	struct regulator *rfcustom;
 	/* for internal 26M clock */
 	struct regulator *dcxo18;
 	struct regulator *avdd33_usb20;
@@ -273,6 +276,8 @@ struct marlin_device {
 	struct work_struct download_wq;
 	struct work_struct gnss_dl_wq;
 	bool no_power_off;
+	bool bound_avdd12;
+	bool bound_dcxo18;
 	bool wait_ge2;
 	bool is_btwf_in_sysfs;
 	bool is_gnss_in_sysfs;
@@ -1030,8 +1035,11 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 	if (!mfirmware)
 		return -ENOMEM;
 
-#ifdef CONFIG_WCN_PARSE_DTS
+#if defined(CONFIG_WCN_PARSE_DTS) && !defined(CONFIG_SPRD_BOARD)
 	marlin_dev->is_btwf_in_sysfs = 1;
+#endif
+#ifdef CONFIG_SPRD_BOARD
+	marlin_dev->is_btwf_in_sysfs = 0;
 #endif
 #ifdef CONFIG_AW_BOARD
 	marlin_dev->is_btwf_in_sysfs = 1;
@@ -1053,7 +1061,24 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 		 * If first power on, download from partition,
 		 * else download from backup firmware.
 		 */
-		if (marlin_dev->first_power_on_flag == 1) {
+		if (marlin_dev->first_power_on_flag == 1 ||
+		    !marlin_dev->firmware.data) {
+#ifdef CONFIG_SPRD_BOARD
+			WCN_INFO("%s requesting uwe5622/%s or %s\n", __func__,
+				 WCN_FW_NAME, WCN_FW_NAME);
+			ret = firmware_request_nowarn(&firmware,
+						      "uwe5622/" WCN_FW_NAME,
+						      marlin_dev->dev);
+			if (ret < 0)
+				ret = request_firmware(&firmware, WCN_FW_NAME,
+						       marlin_dev->dev);
+			if (ret < 0) {
+				WCN_ERR("%s failed to load %s errno:(%d)\n",
+					__func__, WCN_FW_NAME, ret);
+				kfree(mfirmware);
+				return ret;
+			}
+#else
 			WCN_INFO("%s from %s%s start!\n", __func__,
 				 wcn_fw_path[0], WCN_FW_NAME);
 			ret = request_firmware(&firmware, WCN_FW_NAME, NULL);
@@ -1064,6 +1089,7 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 
 				return ret;
 			}
+#endif
 
 			mfirmware->priv = (void *)firmware;
 			mfirmware->data = firmware->data;
@@ -1073,7 +1099,9 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 			marlin_dev->firmware.data = vmalloc(firmware->size);
 			if (!marlin_dev->firmware.data) {
 				WCN_INFO("%s malloc backup error!\n", __func__);
-				return -1;
+				release_firmware(firmware);
+				kfree(mfirmware);
+				return -ENOMEM;
 			}
 
 			memcpy(marlin_dev->firmware.data, firmware->data,
@@ -1681,10 +1709,98 @@ static int marlin_parse_dt(struct platform_device *pdev)
 	}
 #endif /* end of CONFIG_WCN_PARSE_DTS and CONFIG_WCN_PMIC */
 
+#if defined(CONFIG_WCN_PARSE_DTS) && defined(CONFIG_SPRD_BOARD)
+	{
+		const char *xtal_buf = NULL;
+		struct wcn_clock_info *sprd_clk = &marlin_dev->clk_xtal_26m;
+
+		if (!of_property_read_string(np, "xtal-26m-clk-type", &xtal_buf)) {
+			WCN_INFO("config xtal 26m clk %s\n", xtal_buf);
+			if (!strncmp(xtal_buf, "TCXO", 4))
+				sprd_clk->type = WCN_CLOCK_TYPE_TCXO;
+			else if (!strncmp(xtal_buf, "TSX", 3))
+				sprd_clk->type = WCN_CLOCK_TYPE_TSX;
+		}
+	}
+
+	marlin_dev->dvdd12 = devm_regulator_get_optional(&pdev->dev, "dvdd12");
+	if (IS_ERR(marlin_dev->dvdd12)) {
+		if (PTR_ERR(marlin_dev->dvdd12) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		marlin_dev->dvdd12 = NULL;
+	}
+
+	marlin_dev->bound_avdd12 = of_property_read_bool(np, "bound-avdd12");
+	marlin_dev->avdd12 = devm_regulator_get_optional(&pdev->dev, "avdd12");
+	if (IS_ERR(marlin_dev->avdd12)) {
+		if (PTR_ERR(marlin_dev->avdd12) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		WCN_ERR("Get regulator of avdd12 err=%ld\n",
+			PTR_ERR(marlin_dev->avdd12));
+		marlin_dev->avdd12 = NULL;
+	}
+
+	marlin_dev->avdd33 = devm_regulator_get_optional(&pdev->dev, "avdd33");
+	if (IS_ERR(marlin_dev->avdd33)) {
+		if (PTR_ERR(marlin_dev->avdd33) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		WCN_ERR("Get regulator of avdd33 err=%ld\n",
+			PTR_ERR(marlin_dev->avdd33));
+		marlin_dev->avdd33 = NULL;
+	}
+
+	marlin_dev->bound_dcxo18 = of_property_read_bool(np, "bound-dcxo18");
+	marlin_dev->dcxo18 = devm_regulator_get_optional(&pdev->dev, "dcxo18");
+	if (IS_ERR(marlin_dev->dcxo18)) {
+		if (PTR_ERR(marlin_dev->dcxo18) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		WCN_ERR("Get regulator of dcxo18 err=%ld\n",
+			PTR_ERR(marlin_dev->dcxo18));
+		marlin_dev->dcxo18 = NULL;
+	}
+
+	marlin_dev->rfcustom = devm_regulator_get_optional(&pdev->dev, "rfcustom");
+	if (IS_ERR(marlin_dev->rfcustom)) {
+		if (PTR_ERR(marlin_dev->rfcustom) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		marlin_dev->rfcustom = NULL;
+	}
+
+	marlin_dev->clk_32k = devm_clk_get_optional(&pdev->dev, "clk_32k");
+	if (IS_ERR(marlin_dev->clk_32k)) {
+		if (PTR_ERR(marlin_dev->clk_32k) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		WCN_ERR("can't get clk_32k: %ld\n", PTR_ERR(marlin_dev->clk_32k));
+		marlin_dev->clk_32k = NULL;
+	}
+
+	marlin_dev->clk_parent = devm_clk_get_optional(&pdev->dev, "source");
+	if (IS_ERR(marlin_dev->clk_parent)) {
+		if (PTR_ERR(marlin_dev->clk_parent) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		marlin_dev->clk_parent = NULL;
+	}
+	if (marlin_dev->clk_32k && marlin_dev->clk_parent)
+		clk_set_parent(marlin_dev->clk_32k, marlin_dev->clk_parent);
+
+	marlin_dev->clk_enable = devm_clk_get_optional(&pdev->dev, "enable");
+	if (IS_ERR(marlin_dev->clk_enable)) {
+		if (PTR_ERR(marlin_dev->clk_enable) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		marlin_dev->clk_enable = NULL;
+	}
+#endif
+
 #ifdef CONFIG_WCN_PARSE_DTS
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
-	marlin_dev->chip_en = devm_gpiod_get_optional(&pdev->dev, "wl-reg-on",
+#ifdef CONFIG_SPRD_BOARD
+	marlin_dev->chip_en = devm_gpiod_get_optional(&pdev->dev, "enable",
 							GPIOD_OUT_LOW);
+	if (!marlin_dev->chip_en)
+#endif
+		marlin_dev->chip_en = devm_gpiod_get_optional(&pdev->dev,
+								"wl-reg-on",
+								GPIOD_OUT_LOW);
 	if (IS_ERR(marlin_dev->chip_en)) {
 		ret = PTR_ERR(marlin_dev->chip_en);
 		WCN_ERR("chip_en gpio get err: %d\n", ret);
@@ -1717,8 +1833,14 @@ static int marlin_parse_dt(struct platform_device *pdev)
 
 #ifdef CONFIG_WCN_PARSE_DTS
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
-	marlin_dev->reset = devm_gpiod_get_optional(&pdev->dev, "bt-reg-on",
-							GPIOD_OUT_LOW);
+#ifdef CONFIG_SPRD_BOARD
+	marlin_dev->reset = devm_gpiod_get_optional(&pdev->dev, "reset",
+						      GPIOD_OUT_LOW);
+	if (!marlin_dev->reset)
+#endif
+		marlin_dev->reset = devm_gpiod_get_optional(&pdev->dev,
+							      "bt-reg-on",
+							      GPIOD_OUT_LOW);
 	if (IS_ERR(marlin_dev->reset)) {
 		ret = PTR_ERR(marlin_dev->reset);
 		WCN_ERR("reset gpio get err: %d\n", ret);
@@ -1750,8 +1872,15 @@ static int marlin_parse_dt(struct platform_device *pdev)
 
 #ifdef CONFIG_WCN_PARSE_DTS
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
-	marlin_dev->int_ap = devm_gpiod_get_optional(&pdev->dev, "pub-int-gpio",
-							GPIOD_IN);
+#ifdef CONFIG_SPRD_BOARD
+	marlin_dev->int_ap = devm_gpiod_get_optional(&pdev->dev,
+						       "m2-to-ap-irq",
+						       GPIOD_IN);
+	if (!marlin_dev->int_ap)
+#endif
+		marlin_dev->int_ap = devm_gpiod_get_optional(&pdev->dev,
+							       "pub-int-gpio",
+							       GPIOD_IN);
 	if (IS_ERR(marlin_dev->int_ap)) {
 		ret = PTR_ERR(marlin_dev->int_ap);
 		WCN_ERR("int_ap gpio get err: %d\n", ret);
@@ -1971,15 +2100,21 @@ static int marlin_clk_enable(bool enable)
 {
 	int ret = 0;
 
+#ifndef CONFIG_SPRD_BOARD
 	return ret;
+#endif
 
 	if (enable) {
-		ret = clk_prepare_enable(marlin_dev->clk_32k);
-		ret = clk_prepare_enable(marlin_dev->clk_enable);
+		if (!IS_ERR_OR_NULL(marlin_dev->clk_32k))
+			ret = clk_prepare_enable(marlin_dev->clk_32k);
+		if (!ret && !IS_ERR_OR_NULL(marlin_dev->clk_enable))
+			ret = clk_prepare_enable(marlin_dev->clk_enable);
 		WCN_INFO("marlin %s successfully!\n", __func__);
 	} else {
-		clk_disable_unprepare(marlin_dev->clk_enable);
-		clk_disable_unprepare(marlin_dev->clk_32k);
+		if (!IS_ERR_OR_NULL(marlin_dev->clk_enable))
+			clk_disable_unprepare(marlin_dev->clk_enable);
+		if (!IS_ERR_OR_NULL(marlin_dev->clk_32k))
+			clk_disable_unprepare(marlin_dev->clk_32k);
 	}
 
 	return ret;
@@ -1989,22 +2124,25 @@ static int marlin_avdd18_dcxo_enable(bool enable)
 {
 	int ret = 0;
 
+#ifndef CONFIG_SPRD_BOARD
 	return 0;
+#endif
 
 	WCN_INFO("avdd18_dcxo enable 1v8 %d\n", enable);
-	if (marlin_dev->dcxo18 == NULL)
+	if (IS_ERR_OR_NULL(marlin_dev->dcxo18) || marlin_dev->bound_dcxo18)
 		return 0;
 
 	if (enable) {
-		if (regulator_is_enabled(marlin_dev->dcxo18))
+		if (regulator_is_enabled(marlin_dev->dcxo18) > 0)
 			return 0;
-		regulator_set_voltage(marlin_dev->dcxo18,
+		if (regulator_count_voltages(marlin_dev->dcxo18) > 0)
+			regulator_set_voltage(marlin_dev->dcxo18,
 					      1800000, 1800000);
 		ret = regulator_enable(marlin_dev->dcxo18);
 		if (ret)
 			WCN_ERR("fail to enable avdd18_dcxo\n");
 	} else {
-		if (regulator_is_enabled(marlin_dev->dcxo18)) {
+		if (regulator_is_enabled(marlin_dev->dcxo18) > 0) {
 			ret = regulator_disable(marlin_dev->dcxo18);
 			if (ret)
 				WCN_ERR("fail to disable avdd18_dcxo\n");
@@ -2018,20 +2156,23 @@ static int marlin_digital_power_enable(bool enable)
 {
 	int ret = 0;
 
+#ifndef CONFIG_SPRD_BOARD
 	return ret;
+#endif
 
 	WCN_INFO("marlin_digital_power_enable D1v2 %d\n", enable);
-	if (marlin_dev->dvdd12 == NULL)
+	if (IS_ERR_OR_NULL(marlin_dev->dvdd12))
 		return 0;
 
 	if (enable) {
 		/* gpio_direction_output(marlin_dev->reset, 0); */
 
-		regulator_set_voltage(marlin_dev->dvdd12,
+		if (regulator_count_voltages(marlin_dev->dvdd12) > 0)
+			regulator_set_voltage(marlin_dev->dvdd12,
 					      1200000, 1200000);
 		ret = regulator_enable(marlin_dev->dvdd12);
 	} else {
-		if (regulator_is_enabled(marlin_dev->dvdd12))
+		if (regulator_is_enabled(marlin_dev->dvdd12) > 0)
 			ret = regulator_disable(marlin_dev->dvdd12);
 	}
 
@@ -2041,19 +2182,33 @@ static int marlin_analog_power_enable(bool enable)
 {
 	int ret = 0;
 
+#ifndef CONFIG_SPRD_BOARD
 	return ret;
+#endif
 
-	if (marlin_dev->avdd12 != NULL) {
+	if (!IS_ERR_OR_NULL(marlin_dev->avdd12) && !marlin_dev->bound_avdd12) {
 		msleep(20);
 		WCN_INFO("marlin_analog_power_enable 1v2 %d\n", enable);
 		if (enable) {
-			regulator_set_voltage(marlin_dev->avdd12,
-			1200000, 1200000);
+			if (regulator_count_voltages(marlin_dev->avdd12) > 0)
+				regulator_set_voltage(marlin_dev->avdd12,
+						      1200000, 1200000);
 			ret = regulator_enable(marlin_dev->avdd12);
 		} else {
-			if (regulator_is_enabled(marlin_dev->avdd12))
-				ret =
-				regulator_disable(marlin_dev->avdd12);
+			if (regulator_is_enabled(marlin_dev->avdd12) > 0)
+				ret = regulator_disable(marlin_dev->avdd12);
+		}
+	}
+
+	if (!IS_ERR_OR_NULL(marlin_dev->rfcustom)) {
+		if (enable) {
+			if (regulator_count_voltages(marlin_dev->rfcustom) > 0)
+				regulator_set_voltage(marlin_dev->rfcustom,
+						      2800000, 2800000);
+			ret = regulator_enable(marlin_dev->rfcustom);
+		} else {
+			if (regulator_is_enabled(marlin_dev->rfcustom) > 0)
+				ret = regulator_disable(marlin_dev->rfcustom);
 		}
 	}
 
@@ -3288,23 +3443,25 @@ static void wifipa_enable(int enable)
 {
 	int ret = -1;
 
+#ifndef CONFIG_SPRD_BOARD
 	return;
+#endif
 
-	if (marlin_dev->avdd33) {
+	if (!IS_ERR_OR_NULL(marlin_dev->avdd33)) {
 		WCN_INFO("marlin_analog_power_enable 3v3 %d\n", enable);
 		msleep(20);
 		if (enable) {
-			if (regulator_is_enabled(marlin_dev->avdd33))
+			if (regulator_is_enabled(marlin_dev->avdd33) > 0)
 				return;
-			regulator_set_voltage(marlin_dev->avdd33,
-					      3300000, 3300000);
+			if (regulator_count_voltages(marlin_dev->avdd33) > 0)
+				regulator_set_voltage(marlin_dev->avdd33,
+						      3300000, 3300000);
 			ret = regulator_enable(marlin_dev->avdd33);
 			if (ret)
 				WCN_ERR("fail to enable wifipa\n");
 		} else {
-			if (regulator_is_enabled(marlin_dev->avdd33)) {
-				ret =
-				regulator_disable(marlin_dev->avdd33);
+			if (regulator_is_enabled(marlin_dev->avdd33) > 0) {
+				ret = regulator_disable(marlin_dev->avdd33);
 				if (ret)
 					WCN_ERR("fail to disable wifipa\n");
 				WCN_INFO(" wifi pa disable\n");
@@ -3316,7 +3473,9 @@ static void wifipa_enable(int enable)
 
 static void set_wifipa_status(int subsys, int val)
 {
+#ifndef CONFIG_SPRD_BOARD
 	return;
+#endif
 
 	if (val == 1) {
 		if (((subsys == MARLIN_BLUETOOTH) || (subsys == MARLIN_WIFI)) &&
@@ -4039,11 +4198,13 @@ static int marlin_probe(struct platform_device *pdev)
 	struct device_node *regmap_np;
 	struct platform_device *pdev_regmap = NULL;
 #endif
+	int ret;
 
 	marlin_dev = devm_kzalloc(&pdev->dev,
 			sizeof(struct marlin_device), GFP_KERNEL);
 	if (!marlin_dev)
 		return -ENOMEM;
+	marlin_dev->dev = &pdev->dev;
 	marlin_dev->write_buffer = devm_kzalloc(&pdev->dev,
 			PACKET_SIZE, GFP_KERNEL);
 	if (marlin_dev->write_buffer == NULL) {
@@ -4053,7 +4214,10 @@ static int marlin_probe(struct platform_device *pdev)
 	}
 	mutex_init(&(marlin_dev->power_lock));
 	marlin_dev->power_state = 0;
-	if (marlin_parse_dt(pdev) < 0)
+	ret = marlin_parse_dt(pdev);
+	if (ret == -EPROBE_DEFER)
+		return -EPROBE_DEFER;
+	if (ret < 0)
 		WCN_INFO("marlin2 parse_dt some para not config\n");
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
 	if (!IS_ERR_OR_NULL(marlin_dev->reset))
@@ -4077,8 +4241,17 @@ static int marlin_probe(struct platform_device *pdev)
 #ifndef CONFIG_WCN_PCIE
 #ifdef CONFIG_WCN_SDIO
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
+#ifdef CONFIG_SPRD_BOARD
+	if (marlin_dev->int_ap) {
+		int pub_irq = gpiod_to_irq(marlin_dev->int_ap);
+
+		if (pub_irq > 0)
+			sdio_pub_int_init(pub_irq);
+	}
+#else
 	if (marlin_dev->int_ap)
 		sdio_pub_int_init(desc_to_gpio(marlin_dev->int_ap));
+#endif
 #else
 	if (marlin_dev->int_ap > 0)
 		sdio_pub_int_init(marlin_dev->int_ap);
@@ -4298,8 +4471,10 @@ static const struct dev_pm_ops marlin_pm_ops = {
 
 static const struct of_device_id marlin_match_table[] = {
 	{.compatible = "unisoc,uwe_bsp",},
+	{.compatible = "sprd,marlin3",},
 	{ },
 };
+MODULE_DEVICE_TABLE(of, marlin_match_table);
 
 static struct platform_driver marlin_driver = {
 	.driver = {
