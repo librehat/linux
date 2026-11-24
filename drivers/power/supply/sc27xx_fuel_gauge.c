@@ -15,10 +15,10 @@
 #include <linux/slab.h>
 
 /* PMIC global control registers definition */
-#define SC2730_MODULE_EN0		0xc08
-#define SC2730_CLK_EN0			0xc18
-#define SC2731_MODULE_EN0		0x1808
-#define SC2731_CLK_EN0			0x1810
+#define SC2730_MODULE_EN0		0x1808
+#define SC2730_CLK_EN0			0x1810
+#define SC2731_MODULE_EN0		0xc08
+#define SC2731_CLK_EN0			0xc18
 #define SC27XX_FGU_EN			BIT(7)
 #define SC27XX_FGU_RTC_EN		BIT(6)
 
@@ -76,6 +76,11 @@ struct sc27xx_fgu_variant_data {
 	u32 clk_en;
 };
 
+struct sc27xx_fgu_vol_temp {
+	int vol;
+	int temp;
+};
+
 /*
  * struct sc27xx_fgu_data: describe the FGU device
  * @regmap: regmap for register access
@@ -96,11 +101,14 @@ struct sc27xx_fgu_variant_data {
  * @boot_volt: the voltage measured during boot in microvolt
  * @table_len: the capacity table length
  * @resist_table_len: the resistance table length
+ * @temp_table_len: the NTC voltage-to-temperature table length
+ * @comp_resistance: the NTC ground impedance compensation resistance in mOhm
  * @cur_1000ma_adc: ADC value corresponding to 1000 mA
  * @vol_1000mv_adc: ADC value corresponding to 1000 mV
  * @calib_resist: the real resistance of coulomb counter chip in uOhm
  * @cap_table: capacity table with corresponding ocv
  * @resist_table: resistance percent table with corresponding temperature
+ * @temp_table: NTC voltage-to-temperature lookup table
  * @pdata: PMIC variant register information
  */
 struct sc27xx_fgu_data {
@@ -123,11 +131,14 @@ struct sc27xx_fgu_data {
 	int boot_volt;
 	int table_len;
 	int resist_table_len;
+	int temp_table_len;
+	u32 comp_resistance;
 	int cur_1000ma_adc;
 	int vol_1000mv_adc;
 	int calib_resist;
 	struct power_supply_battery_ocv_table *cap_table;
 	struct power_supply_resistance_temp_table *resist_table;
+	struct sc27xx_fgu_vol_temp *temp_table;
 	const struct sc27xx_fgu_variant_data *pdata;
 };
 
@@ -522,6 +533,9 @@ static int sc27xx_fgu_get_vbat_ocv(struct sc27xx_fgu_data *data, int *val)
 		if (ret)
 			return ret;
 
+		if (data->temp_table_len > 0)
+			temp /= 10;
+
 		resistance = power_supply_temp2resist_simple(data->resist_table,
 						data->resist_table_len, temp);
 		resistance = data->internal_resist * resistance / 100;
@@ -545,14 +559,58 @@ static int sc27xx_fgu_get_charge_vol(struct sc27xx_fgu_data *data, int *val)
 	return 0;
 }
 
+static int sc27xx_fgu_vol_to_temp(const struct sc27xx_fgu_vol_temp *table,
+				  int table_len, int vol_uv)
+{
+	int i, temp;
+
+	if (vol_uv >= table[0].vol)
+		return table[0].temp - 1000;
+
+	for (i = 1; i < table_len; i++) {
+		if (vol_uv >= table[i].vol) {
+			s64 num = (s64)(table[i - 1].temp - table[i].temp) *
+				  (vol_uv - table[i].vol);
+			int den = table[i - 1].vol - table[i].vol;
+
+			temp = table[i].temp + div_s64(num, den);
+			return temp - 1000;
+		}
+	}
+
+	return table[table_len - 1].temp - 1000;
+}
+
 static int sc27xx_fgu_get_temp(struct sc27xx_fgu_data *data, int *temp)
 {
-	int ret;
+	int ret, vol;
 
-	ret = iio_read_channel_processed(data->channel, temp);
+	ret = iio_read_channel_processed(data->channel, &vol);
 	if (ret < 0)
 		return ret;
 
+	if (data->temp_table_len <= 0) {
+		*temp = vol;
+		return 0;
+	}
+
+	if (data->comp_resistance) {
+		int bat_cur, res_vol;
+
+		ret = sc27xx_fgu_get_cur_now(data, &bat_cur);
+		if (!ret) {
+			res_vol = div_s64((s64)bat_cur * data->comp_resistance, 1000);
+			if (1850 - res_vol > 0)
+				vol = vol - res_vol +
+				      div_s64((s64)res_vol * (vol - res_vol),
+					      1850 - res_vol);
+			if (vol < 0)
+				vol = 0;
+		}
+	}
+
+	*temp = sc27xx_fgu_vol_to_temp(data->temp_table, data->temp_table_len,
+				       vol * 1000);
 	return 0;
 }
 
@@ -576,7 +634,7 @@ static int sc27xx_fgu_get_status(struct sc27xx_fgu_data *data, int *status)
 {
 	union power_supply_propval val;
 	struct power_supply *psy;
-	int i, ret;
+	int i, ret, cur;
 
 	ret = power_supply_get_property_from_supplier(data->battery,
 						      POWER_SUPPLY_PROP_STATUS,
@@ -598,9 +656,21 @@ static int sc27xx_fgu_get_status(struct sc27xx_fgu_data *data, int *status)
 			return ret;
 
 		*status = val.intval;
+		return 0;
 	}
 
-	return ret;
+	ret = sc27xx_fgu_get_cur_now(data, &cur);
+	if (ret)
+		return ret;
+
+	if (cur > 0)
+		*status = POWER_SUPPLY_STATUS_CHARGING;
+	else if (cur < 0)
+		*status = POWER_SUPPLY_STATUS_DISCHARGING;
+	else
+		*status = POWER_SUPPLY_STATUS_UNKNOWN;
+
+	return 0;
 }
 
 static int sc27xx_fgu_get_property(struct power_supply *psy,
@@ -1214,6 +1284,48 @@ static int sc27xx_fgu_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev,
 			"failed to get fgu calibration resistance\n");
 		return ret;
+	}
+
+	device_property_read_u32(dev, "sprd,comp-resistance-mohm",
+				 &data->comp_resistance);
+
+	ret = device_property_count_u32(dev, "sprd,voltage-temp-table");
+	if (ret > 0) {
+		u32 *raw;
+		int i;
+
+		if (ret % 2) {
+			dev_err(dev, "invalid sprd,voltage-temp-table length\n");
+			return -EINVAL;
+		}
+
+		raw = kcalloc(ret, sizeof(*raw), GFP_KERNEL);
+		if (!raw)
+			return -ENOMEM;
+
+		ret = device_property_read_u32_array(dev,
+						     "sprd,voltage-temp-table",
+						     raw, ret);
+		if (ret) {
+			kfree(raw);
+			return ret;
+		}
+
+		data->temp_table_len = device_property_count_u32(dev,
+					"sprd,voltage-temp-table") / 2;
+		data->temp_table = devm_kcalloc(dev, data->temp_table_len,
+						sizeof(*data->temp_table),
+						GFP_KERNEL);
+		if (!data->temp_table) {
+			kfree(raw);
+			return -ENOMEM;
+		}
+
+		for (i = 0; i < data->temp_table_len; i++) {
+			data->temp_table[i].vol = raw[2 * i];
+			data->temp_table[i].temp = raw[2 * i + 1];
+		}
+		kfree(raw);
 	}
 
 	data->channel = devm_iio_channel_get(dev, "bat-temp");
