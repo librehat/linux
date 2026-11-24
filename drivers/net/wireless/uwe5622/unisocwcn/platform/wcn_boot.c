@@ -56,7 +56,7 @@
 #include "wcn_glb_reg.h"
 #include "wcn_glb.h"
 
-#if defined(CONFIG_STACKPROTECTOR) && defined(CONFIG_STACKPROTECTOR_PER_TASK)
+#if defined(CONFIG_STACKPROTECTOR) && defined(CONFIG_STACKPROTECTOR_PER_TASK) && !defined(CONFIG_ARM64)
 unsigned long __stack_chk_guard __read_mostly;
 EXPORT_SYMBOL(__stack_chk_guard);
 #endif
