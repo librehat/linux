@@ -290,10 +290,14 @@ EXPORT_SYMBOL(sdio_pub_int_gnss_en0);
 
 void sdio_pub_int_poweron(bool state)
 {
+	int prev;
+
 	if (sdio_int.pub_int_num <= 0)
 		return;
 
-	atomic_set(&(sdio_int.chip_power_on), state);
+	prev = atomic_xchg(&(sdio_int.chip_power_on), state);
+	if (prev == (int)state)
+		return;
 
 	if (state)
 		enable_irq(sdio_int.pub_int_num);
