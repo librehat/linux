@@ -3,6 +3,7 @@ config SPARD_WLAN_SUPPORT
 	select AW_WIFI_DEVICE_UWE5622 if ARCH_SUNXI
 	select AW_BIND_VERIFY if ARCH_SUNXI
 	select RK_WIFI_DEVICE_UWE5622 if ARCH_ROCKCHIP
+	select SPRD_WIFI_DEVICE_UWE5622 if ARCH_SPRD
 	help
 	  This is support for spreadtrum wireless chip.
 

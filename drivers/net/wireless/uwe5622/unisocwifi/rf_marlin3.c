@@ -1,6 +1,7 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
+#include <linux/firmware.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/fs.h>
@@ -459,16 +460,6 @@ int get_wifi_config_param(struct wifi_conf_t *p)
 	char conf_name[32] = {0};
 	size_t len;
 
-	len = strlen(WIFI_BOARD_CFG_PATH);
-	if (len > sizeof(path_buf) - sizeof(conf_name)) {
-		wl_err("WIFI_BOARD_CFG_PATH is too long: %s\n", WIFI_BOARD_CFG_PATH);
-		return -1;
-	}
-
-	strcpy(path_buf, WIFI_BOARD_CFG_PATH);
-	if (path_buf[len - 1] != '/')
-		path_buf[len] = '/';
-
 	ant = marlin_get_ant_num();
 	if (ant < 0) {
 		wl_err("get ant config failed, ant = %d\n", ant);
@@ -480,6 +471,47 @@ int get_wifi_config_param(struct wifi_conf_t *p)
 		wl_err("get chip ip failed, chipid = %d\n", chipid);
 		return -1;
 	}
+
+	if (IS_ENABLED(CONFIG_SPRD_WIFI_DEVICE_UWE5622)) {
+		static const char * const fw_fallbacks[] = {
+			"uwe5622/wifi_board_config.ini",
+			"wifi_board_config.ini",
+		};
+		const struct firmware *fw = NULL;
+		char fw_name[64];
+		char *buf;
+		int i, ret;
+
+		snprintf(fw_name, sizeof(fw_name),
+			 "uwe5622/wifi_%08x_%dant.ini", chipid, ant);
+		ret = firmware_request_nowarn(&fw, fw_name, NULL);
+		for (i = 0; ret < 0 && i < ARRAY_SIZE(fw_fallbacks); i++)
+			ret = firmware_request_nowarn(&fw, fw_fallbacks[i], NULL);
+		if (ret == 0 && fw) {
+			buf = vzalloc(fw->size + 1);
+			if (!buf) {
+				release_firmware(fw);
+				return -ENOMEM;
+			}
+			memcpy(buf, fw->data, fw->size);
+			release_firmware(fw);
+			ret = wifi_nvm_buf_operate(buf, fw->size, (void *)p);
+			vfree(buf);
+			wl_info("%s loaded wifi config via firmware loader (ret=%d)\n",
+				__func__, ret);
+			return ret;
+		}
+	}
+
+	len = strlen(WIFI_BOARD_CFG_PATH);
+	if (len > sizeof(path_buf) - sizeof(conf_name)) {
+		wl_err("WIFI_BOARD_CFG_PATH is too long: %s\n", WIFI_BOARD_CFG_PATH);
+		return -1;
+	}
+
+	strcpy(path_buf, WIFI_BOARD_CFG_PATH);
+	if (path_buf[len - 1] != '/')
+		path_buf[len] = '/';
 
 	sprintf(conf_name, "wifi_%8x_%dant.ini", chipid, ant);
 	strcat(path_buf, conf_name);

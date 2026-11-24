@@ -163,6 +163,9 @@ static int sdio_pub_int_register(int irq)
 	if (irq <= 0)
 		return ret;
 
+#ifdef CONFIG_SPRD_BOARD
+	sdio_int.pub_int_num = irq;
+#else
 	ret = gpio_direction_input(irq);
 	if (ret < 0) {
 		SLP_MGR_ERR("public_int, gpio-%d input set fail!!!", irq);
@@ -170,6 +173,7 @@ static int sdio_pub_int_register(int irq)
 	}
 
 	sdio_int.pub_int_num = gpio_to_irq(irq);
+#endif
 	SLP_MGR_INFO("public_int, intnum-%d\n", sdio_int.pub_int_num);
 
 	ret = request_irq(sdio_int.pub_int_num,

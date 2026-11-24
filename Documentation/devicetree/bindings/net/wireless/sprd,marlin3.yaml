@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/wireless/sprd,marlin3.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Unisoc Marlin3 / UWE5622 Wireless Connectivity (WCN) Platform Controller
+
+maintainers:
+  - Simeon <simeon@localhost>
+
+properties:
+  compatible:
+    enum:
+      - sprd,marlin3
+      - unisoc,uwe_bsp
+
+  sdhci-name:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Phandle to the SDIO host controller connected to the WCN chip
+
+  dvdd12-supply:
+    description: 1.2V digital core power regulator
+
+  avdd12-supply:
+    description: 1.2V analog power regulator
+
+  avdd33-supply:
+    description: 3.3V Wi-Fi PA power regulator
+
+  dcxo18-supply:
+    description: 1.8V DCXO crystal oscillator power regulator
+
+  rfcustom-supply:
+    description: Optional RF front-end switch power regulator
+
+  clocks:
+    minItems: 1
+    maxItems: 3
+
+  clock-names:
+    minItems: 1
+    maxItems: 3
+    items:
+      - const: clk_32k
+      - const: source
+      - const: enable
+
+  xtal-26m-clk-type:
+    enum:
+      - TSX
+      - TCXO
+
+  enable-gpios:
+    maxItems: 1
+    description: Chip enable GPIO (active high)
+
+  reset-gpios:
+    maxItems: 1
+    description: Reset / BT enable GPIO (active high)
+
+  m2-to-ap-irq-gpios:
+    maxItems: 1
+    description: Public interrupt GPIO from WCN CP2 to AP
+
+  m2-wakeup-ap-gpios:
+    maxItems: 1
+    description: WCN wakeup AP GPIO
+
+  permit-ap-send-gpios:
+    maxItems: 1
+    description: Allow AP TX GPIO
+
+  m2-to-ap-coexist-gpios:
+    maxItems: 1
+    description: WCN to AP coexistence GPIO
+
+  adma-tx:
+    type: boolean
+    description: Enable SDIO ADMA TX mode
+
+  adma-rx:
+    type: boolean
+    description: Enable SDIO ADMA RX mode
+
+  data-irq:
+    type: boolean
+    description: Use in-band SDIO DAT1 interrupt
+
+  rx-polling:
+    type: boolean
+    description: Use RX polling instead of interrupt
+
+  blksz-512:
+    type: boolean
+    description: Use 512-byte SDIO block size
+
+  pwrseq:
+    type: boolean
+    description: Use standard mmc-pwrseq power sequence
+
+  keep-power-on:
+    type: boolean
+    description: Keep WCN chip powered on after probe/close
+
+  bound-avdd12:
+    type: boolean
+    description: Hardware-bound avdd12 regulator control
+
+  bound-dcxo18:
+    type: boolean
+    description: Hardware-bound dcxo18 regulator control
+
+required:
+  - compatible
+  - sdhci-name
+
+additionalProperties: false

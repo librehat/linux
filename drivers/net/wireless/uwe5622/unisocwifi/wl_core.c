@@ -735,6 +735,7 @@ static int sprdwl_remove(struct platform_device *pdev)
 
 static const struct of_device_id sprdwl_of_match[] = {
 	{.compatible = "sprd,unisoc-wifi",},
+	{.compatible = "sprd,sc2355-wifi",},
 	{}
 };
 MODULE_DEVICE_TABLE(of, sprdwl_of_match);
