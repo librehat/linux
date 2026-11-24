@@ -756,6 +756,80 @@ void sdiohal_dump_aon_reg(void)
 }
 EXPORT_SYMBOL_GPL(sdiohal_dump_aon_reg);
 
+void sdiohal_debug_dt_read_probe(unsigned int addr)
+{
+	struct sdiohal_data_t *p_data = sdiohal_get_data();
+	struct sdio_func *func0, *func1;
+	u8 *buf;
+	u8 ioex = 0, iorx = 0, bus_if = 0, fbr0 = 0, fbr1 = 0;
+	u8 sa0 = 0, sa1 = 0, sa2 = 0, sa3 = 0, pmu = 0, slp = 0;
+	int err = 0, i;
+	int rets[4];
+	u32 vals[4];
+	static const struct {
+		unsigned int len;
+		bool readsb;
+	} probes[4] = {
+		{ 4, false },
+		{ 64, false },
+		{ 512, false },
+		{ 4, true },
+	};
+
+	if (!p_data || !p_data->sdio_func[FUNC_0] || !p_data->sdio_func[FUNC_1])
+		return;
+
+	buf = kmalloc(512, GFP_KERNEL);
+	if (!buf)
+		return;
+
+	func0 = p_data->sdio_func[FUNC_0];
+	func1 = p_data->sdio_func[FUNC_1];
+
+	sdiohal_dt_set_addr(addr);
+	sdio_claim_host(func0);
+	ioex = sdio_readb(func0, 0x02, &err);
+	iorx = sdio_readb(func0, 0x03, &err);
+	bus_if = sdio_readb(func0, 0x07, &err);
+	fbr0 = sdio_readb(func0, 0x110, &err);
+	fbr1 = sdio_readb(func0, 0x111, &err);
+	sa0 = sdio_readb(func0, SDIOHAL_FBR_SYSADDR0, &err);
+	sa1 = sdio_readb(func0, SDIOHAL_FBR_SYSADDR1, &err);
+	sa2 = sdio_readb(func0, SDIOHAL_FBR_SYSADDR2, &err);
+	sa3 = sdio_readb(func0, SDIOHAL_FBR_SYSADDR3, &err);
+	pmu = sdio_readb(func0, 0x140, &err);
+	slp = sdio_readb(func0, 0x148, &err);
+	sdio_release_host(func0);
+
+	sdiohal_info("dt_probe(0x%08x): IOEx=0x%02x IORx=0x%02x BUS=0x%02x FBR1_BLKSZ=0x%02x%02x SYSADDR=%02x%02x%02x%02x pmu=0x%02x slp=0x%02x\n",
+		     addr, ioex, iorx, bus_if, fbr1, fbr0,
+		     sa3, sa2, sa1, sa0, pmu, slp);
+
+	for (i = 0; i < ARRAY_SIZE(probes); i++) {
+		memset(buf, 0x5a, 512);
+		sdiohal_dt_set_addr(addr);
+		sdio_claim_host(func1);
+		if (probes[i].readsb)
+			rets[i] = sdio_readsb(func1, buf,
+					      SDIOHAL_DT_MODE_ADDR,
+					      probes[i].len);
+		else
+			rets[i] = sdio_memcpy_fromio(func1, buf,
+						     SDIOHAL_DT_MODE_ADDR,
+						     probes[i].len);
+		sdio_release_host(func1);
+		vals[i] = *(u32 *)buf;
+	}
+
+	sdiohal_info("dt_probe(0x%08x) cmd53: m4=(%d,0x%08x) m64=(%d,0x%08x) m512=(%d,0x%08x) sb4=(%d,0x%08x)\n",
+		     addr,
+		     rets[0], vals[0], rets[1], vals[1],
+		     rets[2], vals[2], rets[3], vals[3]);
+
+	kfree(buf);
+}
+EXPORT_SYMBOL_GPL(sdiohal_debug_dt_read_probe);
+
 #if SDIO_DUMP_CHANNEL_DATA
 /* dump designated channel data when assert happened.
  * wifi cmd header struct as defined below:
