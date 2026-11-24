@@ -26,6 +26,7 @@
 #include <linux/of.h>
 #include <linux/gpio/consumer.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/ratelimit.h>
 
 static inline int of_get_named_gpio(struct device_node *np, const char *propname, int index)
 {
@@ -1697,15 +1698,19 @@ static int32_t nvt_ts_point_data_checksum(uint8_t *buf, uint8_t length)
 
 	// Compare ckecksum and dump fail data
 	if (checksum != buf[length]) {
-		input_info(true, &ts->client->dev, "i2c/spi packet checksum not match. (point_data[%d]=0x%02X, checksum=0x%02X)\n",
-			length, buf[length], checksum);
+		static DEFINE_RATELIMIT_STATE(nvt_cksum_rs, 5 * HZ, 2);
 
-		for (i = 0; i < 10; i++) {
-			input_info(true, &ts->client->dev, "%02X %02X %02X %02X %02X %02X\n",
-				buf[1 + i*6], buf[2 + i*6], buf[3 + i*6], buf[4 + i*6], buf[5 + i*6], buf[6 + i*6]);
+		if (__ratelimit(&nvt_cksum_rs)) {
+			input_info(true, &ts->client->dev, "i2c/spi packet checksum not match. (point_data[%d]=0x%02X, checksum=0x%02X)\n",
+				length, buf[length], checksum);
+
+			for (i = 0; i < 10; i++) {
+				input_info(true, &ts->client->dev, "%02X %02X %02X %02X %02X %02X\n",
+					buf[1 + i*6], buf[2 + i*6], buf[3 + i*6], buf[4 + i*6], buf[5 + i*6], buf[6 + i*6]);
+			}
+
+			input_info(true, &ts->client->dev, "%02X %02X %02X %02X %02X\n", buf[61], buf[62], buf[63], buf[64], buf[65]);
 		}
-
-		input_info(true, &ts->client->dev, "%02X %02X %02X %02X %02X\n", buf[61], buf[62], buf[63], buf[64], buf[65]);
 
 		return -1;
 	}
@@ -3014,7 +3019,8 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 	input_info(true, &ts->client->dev, "NVT_TOUCH_ESD_PROTECT is %d\n", NVT_TOUCH_ESD_PROTECT);
 #if NVT_TOUCH_ESD_PROTECT
 	INIT_DELAYED_WORK(&nvt_esd_check_work, nvt_esd_check_func);
-	nvt_esd_check_wq = alloc_workqueue("nvt_esd_check_wq", WQ_MEM_RECLAIM, 1);
+	nvt_esd_check_wq = alloc_workqueue("nvt_esd_check_wq",
+					   WQ_MEM_RECLAIM | WQ_UNBOUND, 1);
 	if (!nvt_esd_check_wq) {
 		input_err(true, &ts->client->dev, "nvt_esd_check_wq create workqueue failed\n");
 		ret = -ENOMEM;
