@@ -13,6 +13,7 @@
 #include <dt-bindings/input/gpio-keys.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/interrupt-controller/irq.h>
 #include "ums512.dtsi"
 #include "sc2730.dtsi"
 
@@ -196,6 +197,29 @@
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
 	};
+
+	bat: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion";
+		charge-full-design-microamp-hours = <6804000>;
+		constant-charge-voltage-max-microvolt = <4400000>;
+		constant-charge-current-max-microamp = <2000000>;
+		precharge-current-microamp = <180000>;
+		charge-term-current-microamp = <120000>;
+		voltage-min-design-microvolt = <3456000>;
+		factory-internal-resistance-micro-ohms = <120000>;
+		operating-range-celsius = <0 50>;
+		ocv-capacity-celsius = <20>;
+		ocv-capacity-table-0 =
+			<4354000 100>, <4293000 95>, <4236000 90>, <4180000 85>,
+			<4126000 80>,  <4075000 75>, <4027000 70>, <3985000 65>,
+			<3942000 60>,  <3887000 55>, <3854000 50>, <3830000 45>,
+			<3811000 40>,  <3796000 35>, <3782000 30>, <3765000 25>,
+			<3746000 20>,  <3722000 15>, <3693000 10>, <3681000 5>,
+			<3400000 0>;
+		resistance-temp-table =
+			<45 88>, <25 100>, <10 156>, <0 541>, <(-10) 683>, <(-20) 756>;
+	};
 };
 
 &uart0 {
@@ -323,4 +347,43 @@
 /* Bring-up: AP watchdog off (PMIC sc27xx_wdt handles bootloader-armed watchdog) */
 &ap_wdt {
 	status = "disabled";
+};
+
+/* SGM41542 Switching Charger on I2C4 (0x70700000, addr 0x3b) */
+&i2c4 {
+	status = "okay";
+
+	sgm41542_chg: charger@3b {
+		compatible = "sgmicro,sgm41542";
+		reg = <0x3b>;
+		interrupt-parent = <&ap_gpio>;
+		interrupts = <156 IRQ_TYPE_EDGE_FALLING>;
+		input-current-limit-microamp = <1500000>;
+		input-voltage-limit-microvolt = <4500000>;
+		monitored-battery = <&bat>;
+
+		regulators {
+			sgm4154x_otg_vbus: otg-vbus {
+				regulator-name = "sgm4154x-otg-vbus";
+				regulator-min-microvolt = <4850000>;
+				regulator-max-microvolt = <5300000>;
+			};
+		};
+	};
+};
+
+/* SC2730 PMIC Fuel Gauge Unit */
+&sc2730_fgu {
+	status = "okay";
+	monitored-battery = <&bat>;
+	power-supplies = <&sgm41542_chg>;
+	sprd,calib-resistance-micro-ohms = <10000>;
+	sprd,comp-resistance-mohm = <26>;
+	sprd,voltage-temp-table =
+		<1092000 800>,  <984000 850>,  <878000 900>,  <776000 950>,
+		<679000 1000>,  <591000 1050>, <511000 1100>, <441000 1150>,
+		<379000 1200>,  <325000 1250>, <278000 1300>, <238000 1350>,
+		<204000 1400>,  <175000 1450>, <150000 1500>, <129000 1550>,
+		<112000 1600>,  <97000 1650>,  <84000 1700>,  <73000 1750>,
+		<63000 1800>,   <55000 1850>;
 };
