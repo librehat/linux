@@ -1863,13 +1863,23 @@ int sdiohal_runtime_put(void)
 	 */
 	atomic_set(&p_data->xmit_start, 0);
 #endif
-	xmit_cnt = atomic_read(&p_data->xmit_cnt);
-	while ((xmit_cnt > 0) &&
-		(xmit_cnt < SDIOHAL_REMOVE_CARD_VAL)) {
-		usleep_range(1000, 2000);
+	{
+		int wait_cnt = 0;
+
 		xmit_cnt = atomic_read(&p_data->xmit_cnt);
-		sdiohal_info("%s wait xmit_cnt:%d\n",
-			     __func__, xmit_cnt);
+		while ((xmit_cnt > 0) &&
+		       (xmit_cnt < SDIOHAL_REMOVE_CARD_VAL) &&
+		       (wait_cnt < 1500)) {
+			usleep_range(1000, 2000);
+			xmit_cnt = atomic_read(&p_data->xmit_cnt);
+			if ((wait_cnt++ % 100) == 0)
+				sdiohal_info("%s wait xmit_cnt:%d\n",
+					     __func__, xmit_cnt);
+		}
+		if (wait_cnt >= 1500 && xmit_cnt > 0 &&
+		    xmit_cnt < SDIOHAL_REMOVE_CARD_VAL)
+			sdiohal_err("%s timed out waiting xmit_cnt:%d\n",
+				    __func__, xmit_cnt);
 	}
 
 	sdiohal_info("%s wait xmit_cnt end\n", __func__);

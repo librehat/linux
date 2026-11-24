@@ -430,6 +430,9 @@ EXPORT_SYMBOL_GPL(marlin_get_bt_wl_wake_host_en);
 unsigned int marlin_get_wcn_chipid(void)
 {
 	int ret;
+	int retry;
+	u32 tmp_id = 0;
+	u8 pmu_sts = 0, slp_sts = 0;
 	static unsigned long int chip_id;
 #ifdef CONFIG_WCN_USB
 	return MARLIN3E_AA_CHIPID;
@@ -439,30 +442,46 @@ unsigned int marlin_get_wcn_chipid(void)
 
 	WCN_DEBUG("%s enter.\n", __func__);
 
+	for (retry = 0; retry < 3; retry++) {
 #ifndef CONFIG_CHECK_DRIVER_BY_CHIPID
-	ret = sprdwcn_bus_reg_read(CHIPID_REG, &chip_id, 4);
-	if (ret < 0) {
-		WCN_ERR("marlin read chip ID fail, ret=%d\n", ret);
-		return 0;
-	}
-
-#else
-	/* At first, read Marlin3E chipid register. */
-	ret = sprdwcn_bus_reg_read(CHIPID_REG_M3E, &chip_id, 4);
-	if (ret < 0) {
-		WCN_ERR("read marlin3E chip id fail, ret=%d\n", ret);
-		return 0;
-	}
-
-	/* If it is not Marlin3E, then read Marlin3 chipid register. */
-	if ((chip_id & WCN_CHIPID_MASK) != MARLIN3E_AA_CHIPID) {
-		ret = sprdwcn_bus_reg_read(CHIPID_REG_M3_M3L, &chip_id, 4);
+		ret = sprdwcn_bus_reg_read(CHIPID_REG, &tmp_id, 4);
 		if (ret < 0) {
-			WCN_ERR("read marlin3 chip id fail, ret=%d\n", ret);
+			WCN_ERR("marlin read chip ID fail, ret=%d\n", ret);
 			return 0;
 		}
-	}
+#else
+		/* At first, read Marlin3E chipid register. */
+		ret = sprdwcn_bus_reg_read(CHIPID_REG_M3E, &tmp_id, 4);
+		if (ret < 0) {
+			WCN_ERR("read marlin3E chip id fail, ret=%d\n", ret);
+			return 0;
+		}
+
+		/* If it is not Marlin3E, then read Marlin3 chipid register. */
+		if ((tmp_id & WCN_CHIPID_MASK) != MARLIN3E_AA_CHIPID) {
+			ret = sprdwcn_bus_reg_read(CHIPID_REG_M3_M3L,
+						   &tmp_id, 4);
+			if (ret < 0) {
+				WCN_ERR("read marlin3 chip id fail, ret=%d\n",
+					ret);
+				return 0;
+			}
+		}
 #endif
+		if (tmp_id)
+			break;
+		usleep_range(2000, 3000);
+	}
+
+	if (!tmp_id) {
+		ret = sprdwcn_bus_direct_read(CHIPID_REG, &tmp_id, 4);
+		sprdwcn_bus_aon_readb(0x140, &pmu_sts);
+		sprdwcn_bus_aon_readb(0x148, &slp_sts);
+		WCN_ERR("%s: chipid still 0 after retries (direct ret=%d id=0x%x pmu=0x%02x slp=0x%02x)\n",
+			__func__, ret, tmp_id, pmu_sts, slp_sts);
+	}
+
+	chip_id = tmp_id;
 	WCN_INFO("%s: chipid: 0x%lx\n", __func__, chip_id);
 
 	return chip_id;
@@ -1020,6 +1039,34 @@ struct marlin_firmware {
  *		handle_this_firmware(fw);
  *	marlin_release_firmware(fw);
  */
+/*
+ * Raw partition dumps (e.g. wcnmodem.bin) may be padded to 10 MiB and carry a
+ * Samsung SignerVer footer at SYNC_ADDR - CP_START_ADDR. Clamp non-header
+ * images to the CP IRAM window so SDIO download never overflows into CP regs.
+ */
+static size_t marlin_clamp_raw_fw_size(const u8 *data, size_t size)
+{
+	size_t max_size = FIRMWARE_MAX_SIZE;
+	size_t sync_off;
+
+	if (!data || size <= max_size)
+		return size;
+
+	if (SYNC_ADDR > CP_START_ADDR) {
+		sync_off = SYNC_ADDR - CP_START_ADDR;
+		if (sync_off <= max_size && size >= sync_off + 9 &&
+		    memcmp(data + sync_off, "SignerVer", 9) == 0) {
+			WCN_INFO("%s: raw firmware SignerVer footer at 0x%zx, clamping from 0x%zx\n",
+				 __func__, sync_off, size);
+			return sync_off;
+		}
+	}
+
+	WCN_INFO("%s: clamping oversized raw firmware from 0x%zx to 0x%zx\n",
+		 __func__, size, max_size);
+	return max_size;
+}
+
 static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 {
 	struct marlin_firmware *mfirmware;
@@ -1091,12 +1138,20 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 			}
 #endif
 
+			size_t fw_size = firmware->size;
+
+			if (!bin_magic_is(firmware->data,
+					  IMG_HEAD_MAGIC_COMBINE) &&
+			    memcmp(firmware->data, "WCNM", 4) != 0)
+				fw_size = marlin_clamp_raw_fw_size(
+					firmware->data, firmware->size);
+
 			mfirmware->priv = (void *)firmware;
 			mfirmware->data = firmware->data;
-			mfirmware->size = firmware->size;
+			mfirmware->size = fw_size;
 			mfirmware->is_from_fs = 1;
-			marlin_dev->firmware.size = firmware->size;
-			marlin_dev->firmware.data = vmalloc(firmware->size);
+			marlin_dev->firmware.size = fw_size;
+			marlin_dev->firmware.data = vmalloc(fw_size);
 			if (!marlin_dev->firmware.data) {
 				WCN_INFO("%s malloc backup error!\n", __func__);
 				release_firmware(firmware);
@@ -1105,12 +1160,14 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 			}
 
 			memcpy(marlin_dev->firmware.data, firmware->data,
-			       firmware->size);
+			       fw_size);
 		} else {
 			WCN_INFO("marlin %s from backup start!\n", __func__);
 			mfirmware->priv = (void *)(&marlin_dev->firmware);
 			mfirmware->data = marlin_dev->firmware.data;
-			mfirmware->size = marlin_dev->firmware.size;
+			mfirmware->size = marlin_clamp_raw_fw_size(
+				marlin_dev->firmware.data,
+				marlin_dev->firmware.size);
 			mfirmware->is_from_fs = 0;
 		}
 	} else {
@@ -1195,6 +1252,10 @@ static int marlin_firmware_parse_image(struct marlin_firmware *mfirmware)
 
 		mfirmware->size = img_real_size;
 		size = img_real_size;
+	} else {
+		mfirmware->size = marlin_clamp_raw_fw_size(mfirmware->data,
+							   mfirmware->size);
+		size = mfirmware->size;
 	}
 
 #ifndef CONFIG_WCN_RESUME_POWER_DOWN
@@ -1300,12 +1361,17 @@ static int marlin_firmware_write(struct marlin_firmware *mfirmware)
 			}
 		}
 	} else {
+		u32 readback = 0;
+
 		err = sprdwcn_bus_direct_write_dispack(CP_START_ADDR,
 				mfirmware->data, mfirmware->size, PACKET_SIZE);
 		if (err) {
 			WCN_ERR("%s download error\n", __func__);
 			return -1;
 		}
+		if (sprdwcn_bus_reg_read(CP_START_ADDR, &readback, 4) == 0)
+			WCN_INFO("%s: readback CP_START_ADDR=0x%08x (size=0x%x)\n",
+				 __func__, readback, mfirmware->size);
 	}
 	WCN_INFO("combin_img %d %s finish and successful\n", i, __func__);
 
@@ -1318,8 +1384,9 @@ static void marlin_release_firmware(struct marlin_firmware *mfirmware)
 	if (mfirmware) {
 		if (mfirmware->is_from_fs)
 			release_firmware(mfirmware->priv);
-		else
-			vfree(mfirmware->data);
+		else if (mfirmware->priv &&
+			 mfirmware->priv != &marlin_dev->firmware)
+			vfree(mfirmware->priv);
 		kfree(mfirmware);
 	}
 }
@@ -2304,7 +2371,8 @@ static void marlin_send_sdio_config_to_cp_vendor(void)
 	union wcn_sdiohal_config sdio_cfg = {0};
 
 #if (defined(CONFIG_HISI_BOARD) || defined(CONFIG_AML_BOARD) ||\
-	defined(CONFIG_RK_BOARD) || defined(CONFIG_AW_BOARD))
+	defined(CONFIG_RK_BOARD) || defined(CONFIG_AW_BOARD) ||\
+	defined(CONFIG_SPRD_BOARD))
 	/* Vendor config */
 
 	/* bit[0]: sdio_config_en:
@@ -2569,7 +2637,7 @@ static int marlin_write_cali_data(void)
 			return ret;
 		}
 
-		if (i > 10)
+		if (i > 50)
 			i = 0;
 	} while (i);
 
@@ -2817,7 +2885,7 @@ static int check_cp_ready(void)
 #endif
 		else
 			msleep(20);
-		if (i > 10)
+		if (i > 50)
 			return -1;
 	} while (i);
 
@@ -2966,9 +3034,10 @@ static int chip_reset_release(int val)
 		if (reset_count == 0)
 			gpiod_set_value(marlin_dev->reset, 1);
 		reset_count++;
-	} else {
-		gpiod_set_value(marlin_dev->reset, 0);
+	} else if (reset_count > 0) {
 		reset_count--;
+		if (reset_count == 0)
+			gpiod_set_value(marlin_dev->reset, 0);
 	}
 #else
 	if (marlin_dev->reset <= 0)
@@ -3052,7 +3121,7 @@ void marlin_chip_en(bool enable, bool reset)
 			WCN_INFO("marlin chip en pull up\n");
 		}
 		chip_en_count++;
-	} else {
+	} else if (chip_en_count > 0) {
 		chip_en_count--;
 		if (chip_en_count == 0) {
 			gpiod_set_value(marlin_dev->chip_en, 0);
@@ -3945,14 +4014,21 @@ static int marlin_set_power(int subsys, int val)
 
 out:
 	sprdwcn_bus_runtime_put();
+	cancel_work_sync(&marlin_dev->download_wq);
 #ifdef CONFIG_MEM_PD
 	mem_pd_poweroff_deinit();
 #endif
+	sdio_pub_int_poweron(false);
 	sprdwcn_bus_driver_unregister();
+	sprdwcn_bus_remove_card();
+	wifipa_enable(0);
 	marlin_clk_enable(false);
 	marlin_digital_power_enable(false);
 	marlin_analog_power_enable(false);
+	marlin_avdd18_dcxo_enable(false);
+	marlin_chip_en(false, false);
 	chip_reset_release(0);
+	marlin_dev->download_finish_flag = 0;
 	marlin_dev->power_state = 0;
 	WCN_DEBUG("mutex_unlock\n");
 	mutex_unlock(&marlin_dev->power_lock);

@@ -467,10 +467,6 @@ int get_wifi_config_param(struct wifi_conf_t *p)
 	}
 
 	chipid = marlin_get_wcn_chipid();
-	if (chipid == 0) {
-		wl_err("get chip ip failed, chipid = %d\n", chipid);
-		return -1;
-	}
 
 	if (IS_ENABLED(CONFIG_SPRD_WIFI_DEVICE_UWE5622)) {
 		static const char * const fw_fallbacks[] = {
@@ -480,11 +476,15 @@ int get_wifi_config_param(struct wifi_conf_t *p)
 		const struct firmware *fw = NULL;
 		char fw_name[64];
 		char *buf;
-		int i, ret;
+		int i, ret = -ENOENT;
 
-		snprintf(fw_name, sizeof(fw_name),
-			 "uwe5622/wifi_%08x_%dant.ini", chipid, ant);
-		ret = firmware_request_nowarn(&fw, fw_name, NULL);
+		if (chipid) {
+			snprintf(fw_name, sizeof(fw_name),
+				 "uwe5622/wifi_%08x_%dant.ini", chipid, ant);
+			ret = firmware_request_nowarn(&fw, fw_name, NULL);
+		} else {
+			wl_err("chipid is 0, falling back to generic wifi_board_config.ini\n");
+		}
 		for (i = 0; ret < 0 && i < ARRAY_SIZE(fw_fallbacks); i++)
 			ret = firmware_request_nowarn(&fw, fw_fallbacks[i], NULL);
 		if (ret == 0 && fw) {
@@ -501,6 +501,11 @@ int get_wifi_config_param(struct wifi_conf_t *p)
 				__func__, ret);
 			return ret;
 		}
+	}
+
+	if (chipid == 0) {
+		wl_err("get chip ip failed, chipid = %d\n", chipid);
+		return -1;
 	}
 
 	len = strlen(WIFI_BOARD_CFG_PATH);
