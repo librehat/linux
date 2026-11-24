@@ -153,6 +153,9 @@ static inline void sdhci_sprd_writew(struct sdhci_host *host, u16 val, int reg)
 	if (unlikely(reg == SDHCI_BLOCK_COUNT))
 		return;
 
+	if (unlikely(reg == SDHCI_COMMAND))
+		dma_wmb();
+
 	writew_relaxed(val, host->ioaddr + reg);
 }
 
