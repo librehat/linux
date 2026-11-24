@@ -423,8 +423,11 @@
 /* WCN Marlin3-Lite SDIO1 Interface (0x71200000) */
 &sdio1 {
 	bus-width = <4>;
+	non-removable;
 	no-sd;
 	no-mmc;
+	sprd,phy-delay-sd-uhs-sdr104 = <0x7f 0x76 0x69 0x69>;
+	sprd,phy-delay-sd-uhs-sdr50 = <0x7f 0xf7 0xf5 0xf5>;
 	sd-uhs-sdr50;
 	sd-uhs-sdr104;
 	cap-sdio-irq;
