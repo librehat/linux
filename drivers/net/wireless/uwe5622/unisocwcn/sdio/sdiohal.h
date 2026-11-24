@@ -510,6 +510,7 @@ int sdiohal_aon_writeb(unsigned int addr, unsigned char val);
 int sdiohal_writel(unsigned int system_addr, void *buf);
 int sdiohal_readl(unsigned int system_addr, void *buf);
 void sdiohal_dump_aon_reg(void);
+void sdiohal_debug_dt_read_probe(unsigned int addr);
 
 /* for dumpmem */
 unsigned int sdiohal_get_carddump_status(void);

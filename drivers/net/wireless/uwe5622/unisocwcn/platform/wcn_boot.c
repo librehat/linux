@@ -43,6 +43,10 @@
 #include "../sleep/sdio_int.h"
 #include "../sleep/slp_mgr.h"
 #include "mem_pd_mgr.h"
+
+#ifdef CONFIG_WCN_SDIO
+extern void sdiohal_debug_dt_read_probe(unsigned int addr);
+#endif
 #include "wcn_op.h"
 #include "wcn_parn_parser.h"
 #include "pcie_boot.h"
@@ -474,11 +478,13 @@ unsigned int marlin_get_wcn_chipid(void)
 	}
 
 	if (!tmp_id) {
-		ret = sprdwcn_bus_direct_read(CHIPID_REG, &tmp_id, 4);
 		sprdwcn_bus_aon_readb(0x140, &pmu_sts);
 		sprdwcn_bus_aon_readb(0x148, &slp_sts);
-		WCN_ERR("%s: chipid still 0 after retries (direct ret=%d id=0x%x pmu=0x%02x slp=0x%02x)\n",
-			__func__, ret, tmp_id, pmu_sts, slp_sts);
+		WCN_ERR("%s: chipid still 0 after retries (pmu=0x%02x slp=0x%02x)\n",
+			__func__, pmu_sts, slp_sts);
+#ifdef CONFIG_WCN_SDIO
+		sdiohal_debug_dt_read_probe(CHIPID_REG);
+#endif
 	}
 
 	chip_id = tmp_id;
@@ -1369,9 +1375,14 @@ static int marlin_firmware_write(struct marlin_firmware *mfirmware)
 			WCN_ERR("%s download error\n", __func__);
 			return -1;
 		}
-		if (sprdwcn_bus_reg_read(CP_START_ADDR, &readback, 4) == 0)
-			WCN_INFO("%s: readback CP_START_ADDR=0x%08x (size=0x%x)\n",
+		if (sprdwcn_bus_reg_read(CP_START_ADDR, &readback, 4) == 0) {
+			WCN_INFO("%s: readback CP_START_ADDR=0x%08x (size=0x%zx)\n",
 				 __func__, readback, mfirmware->size);
+#ifdef CONFIG_WCN_SDIO
+			if (readback == 0)
+				sdiohal_debug_dt_read_probe(CP_START_ADDR);
+#endif
+		}
 	}
 	WCN_INFO("combin_img %d %s finish and successful\n", i, __func__);
 
