@@ -32,6 +32,7 @@
 		serial1 = &uart1;
 		mmc0 = &sdio3;
 		mmc1 = &sdio0;
+		mmc2 = &sdio1;
 	};
 
 	memory@80000000 {
@@ -220,6 +221,37 @@
 		resistance-temp-table =
 			<45 88>, <25 100>, <10 156>, <0 541>, <(-10) 683>, <(-20) 756>;
 	};
+
+	sprd-marlin3 {
+		compatible = "sprd,marlin3";
+		sdhci-name = <&sdio1>;
+		avdd12-supply = <&vddwcn>;
+		avdd33-supply = <&vddwifipa>;
+		dcxo18-supply = <&vddsim2>;
+		rfcustom-supply = <&vddkpled>;
+		clocks = <&aon_clk CLK_AUX0>, <&ext_32k>, <&aonapb_gate CLK_AUX0_EB>;
+		clock-names = "clk_32k", "source", "enable";
+		xtal-26m-clk-type = "TSX";
+		enable-gpios = <&ap_gpio 143 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&ap_gpio 95 GPIO_ACTIVE_HIGH>;
+		m2-to-ap-irq-gpios = <&ap_gpio 94 GPIO_ACTIVE_HIGH>;
+		m2-wakeup-ap-gpios = <&ap_gpio 32 GPIO_ACTIVE_HIGH>;
+		permit-ap-send-gpios = <&ap_gpio 121 GPIO_ACTIVE_HIGH>;
+		m2-to-ap-coexist-gpios = <&ap_gpio 119 GPIO_ACTIVE_HIGH>;
+		adma-tx;
+		adma-rx;
+		data-irq;
+		blksz-512;
+	};
+
+	sprd-wlan {
+		compatible = "sprd,sc2355-wifi";
+	};
+
+	sprd-mtty {
+		compatible = "sprd,mtty";
+		sprd,name = "ttyBT";
+	};
 };
 
 &uart0 {
@@ -386,4 +418,16 @@
 		<204000 1400>,  <175000 1450>, <150000 1500>, <129000 1550>,
 		<112000 1600>,  <97000 1650>,  <84000 1700>,  <73000 1750>,
 		<63000 1800>,   <55000 1850>;
+};
+
+/* WCN Marlin3-Lite SDIO1 Interface (0x71200000) */
+&sdio1 {
+	bus-width = <4>;
+	no-sd;
+	no-mmc;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
+	cap-sdio-irq;
+	keep-power-in-suspend;
+	status = "okay";
 };
