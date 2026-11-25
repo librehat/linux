@@ -1120,7 +1120,7 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 #ifdef CONFIG_SPRD_BOARD
 			WCN_INFO("%s requesting uwe5622/%s or %s\n", __func__,
 				 WCN_FW_NAME, WCN_FW_NAME);
-			ret = firmware_request_nowarn(&firmware,
+			ret = request_firmware_direct(&firmware,
 						      "uwe5622/" WCN_FW_NAME,
 						      marlin_dev->dev);
 			if (ret < 0)

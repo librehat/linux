@@ -88,7 +88,7 @@ static int pub_int_handle_thread(void *data)
 		if (ret < 0)
 			SLP_MGR_INFO("sdio cmd52 fail, ret-%d", ret);
 		else {
-			SLP_MGR_INFO("PUB_INT_STS0-0x%x\n", pub_int_sts0.reg);
+			SLP_MGR_DBG("PUB_INT_STS0-0x%x\n", pub_int_sts0.reg);
 			sdio_pub_int_clr0(pub_int_sts0.reg);
 
 			bit_num = 0;
@@ -131,7 +131,7 @@ static irqreturn_t pub_int_isr(int irq, void *para)
 	}
 
 	irq_cnt++;
-	SLP_MGR_INFO("irq_cnt%d!!", irq_cnt);
+	SLP_MGR_DBG("irq_cnt%d!!", irq_cnt);
 
 	complete(&(sdio_int.pub_int_completion));
 

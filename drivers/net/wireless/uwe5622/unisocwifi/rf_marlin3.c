@@ -481,12 +481,12 @@ int get_wifi_config_param(struct wifi_conf_t *p)
 		if (chipid) {
 			snprintf(fw_name, sizeof(fw_name),
 				 "uwe5622/wifi_%08x_%dant.ini", chipid, ant);
-			ret = firmware_request_nowarn(&fw, fw_name, NULL);
+			ret = request_firmware_direct(&fw, fw_name, NULL);
 		} else {
 			wl_err("chipid is 0, falling back to generic wifi_board_config.ini\n");
 		}
 		for (i = 0; ret < 0 && i < ARRAY_SIZE(fw_fallbacks); i++)
-			ret = firmware_request_nowarn(&fw, fw_fallbacks[i], NULL);
+			ret = request_firmware_direct(&fw, fw_fallbacks[i], NULL);
 		if (ret == 0 && fw) {
 			buf = vzalloc(fw->size + 1);
 			if (!buf) {
