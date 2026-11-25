@@ -1746,7 +1746,6 @@ static int sdiohal_set_cp_pin_status(void)
 static void sdiohal_irq_handler_data(struct sdio_func *func)
 {
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
-	static int irq_log_cnt;
 	unsigned char intx = 0;
 	int err;
 
@@ -1765,9 +1764,8 @@ static void sdiohal_irq_handler_data(struct sdio_func *func)
 	sdio_release_host(p_data->sdio_func[FUNC_0]);
 	if (err < 0)
 		sdiohal_err("%s error %d\n", __func__, err);
-	else if (irq_log_cnt < 5)
-		sdiohal_info("%s: inband irq #%d intx=0x%02x\n",
-			     __func__, ++irq_log_cnt, intx);
+	else
+		sdiohal_debug("%s: inband irq intx=0x%02x\n", __func__, intx);
 
 	sdiohal_lock_rx_ws();
 	sdiohal_rx_up();
