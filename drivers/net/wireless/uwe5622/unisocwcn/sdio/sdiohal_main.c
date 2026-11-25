@@ -830,6 +830,40 @@ void sdiohal_debug_dt_read_probe(unsigned int addr)
 }
 EXPORT_SYMBOL_GPL(sdiohal_debug_dt_read_probe);
 
+void sdiohal_debug_dt_write_probe(unsigned int addr)
+{
+	struct sdiohal_data_t *p_data = sdiohal_get_data();
+	u8 *tmp64;
+	u32 test4 = 0x5a5a1234, rb4 = 0, rb64 = 0, rb_clr = 0;
+
+	if (!p_data || !p_data->sdio_func[FUNC_0] || !p_data->sdio_func[FUNC_1])
+		return;
+
+	tmp64 = kzalloc(64, GFP_KERNEL);
+	if (!tmp64)
+		return;
+
+	sdiohal_writel(addr, &test4);
+	sdiohal_readl(addr, &rb4);
+	if (rb4 != test4) {
+		*(__le32 *)tmp64 = cpu_to_le32(0x5a5a5678);
+		sdiohal_dt_write(addr, tmp64, 64);
+		sdiohal_readl(addr, &rb64);
+		if (rb64 == 0x5a5a5678)
+			p_data->dt_write_align64 = true;
+	}
+
+	memset(tmp64, 0, 64);
+	sdiohal_dt_write(addr, tmp64, 64);
+	sdiohal_readl(addr, &rb_clr);
+
+	sdiohal_info("dt_write_probe(0x%08x): w4=0x%08x w64=0x%08x clr=0x%08x align64=%d\n",
+		     addr, rb4, rb64, rb_clr, p_data->dt_write_align64);
+
+	kfree(tmp64);
+}
+EXPORT_SYMBOL_GPL(sdiohal_debug_dt_write_probe);
+
 #if SDIO_DUMP_CHANNEL_DATA
 /* dump designated channel data when assert happened.
  * wifi cmd header struct as defined below:
@@ -883,19 +917,47 @@ int sdiohal_writel(unsigned int system_addr, void *buf)
 	sdiohal_cp_tx_wakeup(DT_WRITEL);
 	sdiohal_op_enter();
 
-	ret = sdiohal_dt_set_addr(system_addr);
-	if (ret != 0) {
-		sdiohal_op_leave();
-		sdiohal_cp_tx_sleep(DT_WRITEL);
-		sdiohal_card_unlock(p_data);
-		return ret;
+	if (p_data->dt_write_align64 &&
+	    system_addr >= 0x40500000 && system_addr <= 0x405e73fc) {
+		unsigned int addr_aligned = system_addr & ~3U;
+		unsigned int base = min_t(unsigned int, addr_aligned, 0x405e73c0U);
+		unsigned int off = addr_aligned - base;
+
+		ret = sdiohal_dt_set_addr(base);
+		if (ret == 0) {
+			sdio_claim_host(p_data->sdio_func[FUNC_1]);
+			ret = sdio_memcpy_fromio(p_data->sdio_func[FUNC_1],
+						 p_data->dt_buf,
+						 SDIOHAL_DT_MODE_ADDR, 64);
+			sdio_release_host(p_data->sdio_func[FUNC_1]);
+		}
+		if (ret == 0) {
+			*(__le32 *)(p_data->dt_buf + off) =
+				cpu_to_le32(*(unsigned int *)buf);
+			ret = sdiohal_dt_set_addr(base);
+		}
+		if (ret == 0) {
+			sdio_claim_host(p_data->sdio_func[FUNC_1]);
+			ret = sdio_memcpy_toio(p_data->sdio_func[FUNC_1],
+					       SDIOHAL_DT_MODE_ADDR,
+					       p_data->dt_buf, 64);
+			sdio_release_host(p_data->sdio_func[FUNC_1]);
+		}
+	} else {
+		ret = sdiohal_dt_set_addr(system_addr);
+		if (ret != 0) {
+			sdiohal_op_leave();
+			sdiohal_cp_tx_sleep(DT_WRITEL);
+			sdiohal_card_unlock(p_data);
+			return ret;
+		}
+
+		sdio_claim_host(p_data->sdio_func[FUNC_1]);
+		sdio_writel(p_data->sdio_func[FUNC_1],
+			    *(unsigned int *)buf, SDIOHAL_DT_MODE_ADDR, &ret);
+		sdio_release_host(p_data->sdio_func[FUNC_1]);
 	}
 
-	sdio_claim_host(p_data->sdio_func[FUNC_1]);
-	sdio_writel(p_data->sdio_func[FUNC_1],
-		*(unsigned int *)buf, SDIOHAL_DT_MODE_ADDR, &ret);
-
-	sdio_release_host(p_data->sdio_func[FUNC_1]);
 	sdiohal_op_leave();
 	sdiohal_cp_tx_sleep(DT_WRITEL);
 
@@ -949,8 +1011,10 @@ int sdiohal_readl(unsigned int system_addr, void *buf)
 
 	sdio_claim_host(p_data->sdio_func[FUNC_1]);
 
-	*(unsigned int *)buf = sdio_readl(p_data->sdio_func[FUNC_1],
-					  SDIOHAL_DT_MODE_ADDR, &ret);
+	ret = sdio_memcpy_fromio(p_data->sdio_func[FUNC_1],
+				 p_data->dt_buf, SDIOHAL_DT_MODE_ADDR, 64);
+	if (ret == 0)
+		*(unsigned int *)buf = le32_to_cpup((__le32 *)p_data->dt_buf);
 
 	sdio_release_host(p_data->sdio_func[FUNC_1]);
 	sdiohal_op_leave();
@@ -1041,8 +1105,11 @@ int sdiohal_dt_write(unsigned int system_addr,
 		else
 			trans_len = min(remainder,
 					max_bytes(p_data->sdio_func[FUNC_1]));
+		trans_len = min(trans_len, 512U);
+		memcpy(p_data->dt_buf, buf, trans_len);
 		ret = sdio_memcpy_toio(p_data->sdio_func[FUNC_1],
-				       SDIOHAL_DT_MODE_ADDR, buf, trans_len);
+				       SDIOHAL_DT_MODE_ADDR,
+				       p_data->dt_buf, trans_len);
 		if (ret)
 			break;
 
@@ -1068,8 +1135,8 @@ int sdiohal_dt_read(unsigned int system_addr, void *buf,
 			   unsigned int len)
 {
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
-	unsigned int remainder = len;
-	unsigned int trans_len;
+	unsigned int offset = 0;
+	u8 *dst = buf;
 	int ret = 0;
 
 	if (sdiohal_card_lock(p_data, __func__))
@@ -1083,30 +1150,47 @@ int sdiohal_dt_read(unsigned int system_addr, void *buf,
 	sdiohal_resume_check();
 	sdiohal_cp_rx_wakeup(DT_READ);
 	sdiohal_op_enter();
-	ret = sdiohal_dt_set_addr(system_addr);
-	if (ret != 0) {
-		sdiohal_op_leave();
-		sdiohal_cp_rx_sleep(DT_READ);
-		sdiohal_card_unlock(p_data);
-		return ret;
-	}
 
-	sdio_claim_host(p_data->sdio_func[FUNC_1]);
-	while (remainder > 0) {
-		if (remainder >= p_data->sdio_func[FUNC_1]->cur_blksize)
-			trans_len = p_data->sdio_func[FUNC_1]->cur_blksize;
-		else
-			trans_len = min(remainder,
-					max_bytes(p_data->sdio_func[FUNC_1]));
-		ret = sdio_memcpy_fromio(p_data->sdio_func[FUNC_1],
-					 buf, SDIOHAL_DT_MODE_ADDR, trans_len);
-		if (ret)
+	while (offset < len) {
+		unsigned int rem = len - offset;
+		unsigned int read_addr = system_addr + offset;
+		unsigned int read_len;
+		unsigned int copy_off = 0;
+		unsigned int copy_len;
+
+		if (rem >= 512) {
+			read_len = 512;
+			copy_len = 512;
+		} else if (rem >= 64) {
+			read_len = 64;
+			copy_len = 64;
+		} else if (offset >= (64 - rem)) {
+			copy_off = 64 - rem;
+			read_addr = system_addr + offset - copy_off;
+			read_len = 64;
+			copy_len = rem;
+		} else {
+			read_len = 64;
+			copy_len = rem;
+		}
+
+		ret = sdiohal_dt_set_addr(read_addr);
+		if (ret != 0)
 			break;
 
-		remainder -= trans_len;
-		buf += trans_len;
+		sdio_claim_host(p_data->sdio_func[FUNC_1]);
+		ret = sdio_memcpy_fromio(p_data->sdio_func[FUNC_1],
+					 p_data->dt_buf, SDIOHAL_DT_MODE_ADDR,
+					 read_len);
+		if (ret == 0)
+			memcpy(dst + offset, p_data->dt_buf + copy_off, copy_len);
+		sdio_release_host(p_data->sdio_func[FUNC_1]);
+		if (ret != 0)
+			break;
+
+		offset += copy_len;
 	}
-	sdio_release_host(p_data->sdio_func[FUNC_1]);
+
 	sdiohal_op_leave();
 	sdiohal_cp_rx_sleep(DT_READ);
 	if (ret != 0) {
@@ -2457,18 +2541,30 @@ int sdiohal_init(void)
 		WARN_ON(1);
 		return -ENOMEM;
 	}
+	p_data->dt_buf = kmalloc(512, GFP_KERNEL);
+	if (!p_data->dt_buf) {
+		kfree(p_data);
+		return -ENOMEM;
+	}
 	p_data->printlog_txchn = SDIO_CHANNEL_NUM;
 	p_data->printlog_rxchn = SDIO_CHANNEL_NUM;
 	/* card not ready */
 	atomic_set(&p_data->xmit_cnt, SDIOHAL_REMOVE_CARD_VAL);
 	sdiohal_data = p_data;
 
-	if (sdiohal_parse_dt() < 0)
+	if (sdiohal_parse_dt() < 0) {
+		kfree(p_data->dt_buf);
+		kfree(p_data);
+		sdiohal_data = NULL;
 		return -1;
+	}
 
 	ret = sdiohal_misc_init();
 	if (ret != 0) {
 		sdiohal_err("sdiohal_misc_init error :%d\n", ret);
+		kfree(p_data->dt_buf);
+		kfree(p_data);
+		sdiohal_data = NULL;
 		return -1;
 	}
 
@@ -2512,6 +2608,7 @@ void sdiohal_exit(void)
 	sdiohal_misc_deinit();
 	if (sdiohal_data) {
 		sdiohal_data->sdio_dev_host = NULL;
+		kfree(sdiohal_data->dt_buf);
 		kfree(sdiohal_data);
 		sdiohal_data = NULL;
 	}
