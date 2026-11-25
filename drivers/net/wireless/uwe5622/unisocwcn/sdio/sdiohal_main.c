@@ -267,6 +267,8 @@ int sdiohal_sdio_pt_write(unsigned char *src, unsigned int datalen)
 		SDIOHAL_PK_MODE_ADDR, src, datalen);
 	sdio_release_host(p_data->sdio_func[FUNC_1]);
 	if (ret != 0) {
+		sdiohal_err("%s: CMD53 write failed ret=%d len=%u\n",
+			    __func__, ret, datalen);
 		sdiohal_success_trans_pac_num();
 		sdiohal_abort();
 	}
@@ -310,8 +312,11 @@ int sdiohal_sdio_pt_read(unsigned char *src, unsigned int datalen)
 	ret = sdio_readsb(p_data->sdio_func[FUNC_1], src,
 		SDIOHAL_PK_MODE_ADDR, datalen);
 	sdio_release_host(p_data->sdio_func[FUNC_1]);
-	if (ret != 0)
+	if (ret != 0) {
+		sdiohal_err("%s: CMD53 read failed ret=%d len=%u\n",
+			    __func__, ret, datalen);
 		sdiohal_abort();
+	}
 	sdiohal_op_leave();
 	sdiohal_card_unlock(p_data);
 
