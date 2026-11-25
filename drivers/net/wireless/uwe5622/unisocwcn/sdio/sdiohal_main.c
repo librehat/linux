@@ -981,7 +981,11 @@ int sdiohal_writel(unsigned int system_addr, void *buf)
 int sdiohal_readl(unsigned int system_addr, void *buf)
 {
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+	bool is_spinlock = (system_addr >= 0x40850800 &&
+			    system_addr <= 0x408508fc);
+	u32 extra[15];
 	int ret = 0;
+	int k;
 
 	if (sdiohal_card_lock(p_data, __func__))
 		return -1;
@@ -1018,10 +1022,37 @@ int sdiohal_readl(unsigned int system_addr, void *buf)
 
 	ret = sdio_memcpy_fromio(p_data->sdio_func[FUNC_1],
 				 p_data->dt_buf, SDIOHAL_DT_MODE_ADDR, 64);
-	if (ret == 0)
+	if (ret == 0) {
 		*(unsigned int *)buf = le32_to_cpup((__le32 *)p_data->dt_buf);
+		if (is_spinlock) {
+			for (k = 1; k < 16; k++)
+				extra[k - 1] = le32_to_cpup((__le32 *)(p_data->dt_buf + 4 * k));
+		}
+	}
 
 	sdio_release_host(p_data->sdio_func[FUNC_1]);
+
+	/*
+	 * 64-byte DT read touches 16 consecutive registers; release any hardware
+	 * spinlock slots in 0x40850800..0x408508fc that the trailing 60 bytes
+	 * acquired (read == 0).
+	 */
+	if (ret == 0 && is_spinlock) {
+		for (k = 1; k < 16; k++) {
+			unsigned int addr = system_addr + 4 * k;
+			int unlock_ret = 0;
+
+			if (addr > 0x408508fc || extra[k - 1] != 0)
+				continue;
+			if (sdiohal_dt_set_addr(addr) == 0) {
+				sdio_claim_host(p_data->sdio_func[FUNC_1]);
+				sdio_writel(p_data->sdio_func[FUNC_1],
+					    0x55AA10C5, SDIOHAL_DT_MODE_ADDR,
+					    &unlock_ret);
+				sdio_release_host(p_data->sdio_func[FUNC_1]);
+			}
+		}
+	}
 	sdiohal_op_leave();
 #ifdef CONFIG_CHECK_DRIVER_BY_CHIPID
 	/* If defined this macro, the driver will read chipid register firstly.

@@ -480,6 +480,13 @@ static int mem_pd_read_add_from_cp(void)
 	mem_info_cp.wifi_begin_addr = wifi_begin + SDIO_CP_BASE_ADD;
 	mem_info_cp.wifi_end_addr = wifi_end + SDIO_CP_BASE_ADD;
 	mem_info_cp.wifi_size = wifi_end - wifi_begin;
+	MEM_PD_MGR_INFO("bt:[0x%x..0x%x](0x%x) wifi:[0x%x..0x%x](0x%x)",
+			mem_info_cp.bt_begin_addr, mem_info_cp.bt_end_addr,
+			mem_info_cp.bt_size, mem_info_cp.wifi_begin_addr,
+			mem_info_cp.wifi_end_addr, mem_info_cp.wifi_size);
+	if (bt_end <= bt_begin || wifi_end <= wifi_begin ||
+	    mem_info_cp.bt_size > 0x100000 || mem_info_cp.wifi_size > 0x100000)
+		return MEM_PD_ERR;
 
 #ifndef CONFIG_CHECK_DRIVER_BY_CHIPID
 #ifdef CONFIG_UWE5622
@@ -557,8 +564,11 @@ int mem_pd_save_bin(void)
 	if (mem_pd.bin_save_done == 0) {
 		mem_pd.bin_save_done = 1;
 		MEM_PD_MGR_INFO("cp first power on");
-		mem_pd_read_add_from_cp();
-		sdio_read_mem_from_cp();
+		if (mem_pd_read_add_from_cp() == 0)
+			sdio_read_mem_from_cp();
+		else
+			MEM_PD_MGR_ERR("%s invalid mem addr range from cp",
+				       __func__);
 		/* save to char[] */
 	} else
 		MEM_PD_MGR_INFO("cp not first power on %s do nothing",
