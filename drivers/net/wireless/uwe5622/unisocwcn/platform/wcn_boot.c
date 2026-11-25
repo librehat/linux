@@ -46,6 +46,7 @@
 
 #ifdef CONFIG_WCN_SDIO
 extern void sdiohal_debug_dt_read_probe(unsigned int addr);
+extern void sdiohal_debug_dt_write_probe(unsigned int addr);
 #endif
 #include "wcn_op.h"
 #include "wcn_parn_parser.h"
@@ -1383,6 +1384,9 @@ static int marlin_firmware_write(struct marlin_firmware *mfirmware)
 				sdiohal_debug_dt_read_probe(CP_START_ADDR);
 #endif
 		}
+#ifdef CONFIG_WCN_SDIO
+		sdiohal_debug_dt_write_probe(SYNC_ADDR);
+#endif
 	}
 	WCN_INFO("combin_img %d %s finish and successful\n", i, __func__);
 

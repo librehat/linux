@@ -366,6 +366,8 @@ struct sdiohal_data_t {
 	unsigned int remain_pac_num;
 	unsigned long long rx_packer_cnt;
 	char *dtbs_buf;
+	u8 *dt_buf;
+	bool dt_write_align64;
 
 	/* for performance statics */
 	struct timespec tm_begin_sch;
@@ -511,6 +513,7 @@ int sdiohal_writel(unsigned int system_addr, void *buf);
 int sdiohal_readl(unsigned int system_addr, void *buf);
 void sdiohal_dump_aon_reg(void);
 void sdiohal_debug_dt_read_probe(unsigned int addr);
+void sdiohal_debug_dt_write_probe(unsigned int addr);
 
 /* for dumpmem */
 unsigned int sdiohal_get_carddump_status(void);
