@@ -1710,6 +1710,8 @@ static int sdiohal_set_cp_pin_status(void)
 static void sdiohal_irq_handler_data(struct sdio_func *func)
 {
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+	static int irq_log_cnt;
+	unsigned char intx = 0;
 	int err;
 
 	sdiohal_debug("%s entry\n", __func__);
@@ -1723,10 +1725,13 @@ static void sdiohal_irq_handler_data(struct sdio_func *func)
 
 	/* send cmd to clear cp int status */
 	sdio_claim_host(p_data->sdio_func[FUNC_0]);
-	sdio_f0_readb(p_data->sdio_func[FUNC_0], SDIO_CCCR_INTx, &err);
+	intx = sdio_f0_readb(p_data->sdio_func[FUNC_0], SDIO_CCCR_INTx, &err);
 	sdio_release_host(p_data->sdio_func[FUNC_0]);
 	if (err < 0)
 		sdiohal_err("%s error %d\n", __func__, err);
+	else if (irq_log_cnt < 5)
+		sdiohal_info("%s: inband irq #%d intx=0x%02x\n",
+			     __func__, ++irq_log_cnt, intx);
 
 	sdiohal_lock_rx_ws();
 	sdiohal_rx_up();
@@ -2219,10 +2224,10 @@ static int sdiohal_probe(struct sdio_func *func,
 
 	/* the card is nonremovable */
 	p_data->sdio_dev_host->caps |= MMC_CAP_NONREMOVABLE;
-#ifdef CONFIG_RK_BOARD
-	/* Some RK platform, if config caps with MMC_CAP_SDIO_IRQ, will set
-	 * caps2 with MMC_CAP2_SDIO_IRQ_NOTHREAD at the same time.
-	 * This is unexpected. So clear this status.
+#if defined(CONFIG_RK_BOARD) || defined(CONFIG_SPRD_BOARD)
+	/* Some host controllers set MMC_CAP2_SDIO_IRQ_NOTHREAD alongside
+	 * MMC_CAP_SDIO_IRQ, which requires ksdioirqd to stay disabled; clear it
+	 * when using inband data-pin IRQs.
 	 */
 	if (p_data->irq_type == SDIOHAL_RX_INBAND_IRQ)
 		p_data->sdio_dev_host->caps2 &= ~MMC_CAP2_SDIO_IRQ_NOTHREAD;
