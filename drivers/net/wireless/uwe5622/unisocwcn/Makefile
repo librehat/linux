@@ -345,6 +345,7 @@ ccflags-y += -DCONFIG_WCN_PARSE_DTS
 ccflags-y += -DCONFIG_WCN_POWER_UP_DOWN
 ccflags-y += -DCONFIG_SDIO_INBAND_INT
 ccflags-y += -DCONFIG_SDIO_BLKSIZE_512
+ccflags-y += -DCONFIG_MEM_PD
 endif
 ### ---------- Unisoc SPRD end ---------- ###
 
