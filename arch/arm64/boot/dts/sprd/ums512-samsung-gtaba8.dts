@@ -238,8 +238,7 @@
 		m2-wakeup-ap-gpios = <&ap_gpio 32 GPIO_ACTIVE_HIGH>;
 		permit-ap-send-gpios = <&ap_gpio 121 GPIO_ACTIVE_HIGH>;
 		m2-to-ap-coexist-gpios = <&ap_gpio 119 GPIO_ACTIVE_HIGH>;
-		adma-tx;
-		adma-rx;
+		/* Use SDMA packet mode so CMD53 transfers stay single contiguous 512B-aligned buffers on sdhci-r11. */
 		data-irq;
 		blksz-512;
 	};
