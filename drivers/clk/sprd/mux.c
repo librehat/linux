@@ -47,17 +47,12 @@ int sprd_mux_helper_set_parent(const struct sprd_clk_common *common,
 			       const struct sprd_mux_ssel *mux,
 			       u8 index)
 {
-	unsigned int reg;
-
 	if (mux->table)
 		index = mux->table[index];
 
-	regmap_read(common->regmap, common->reg, &reg);
-	reg &= ~GENMASK(mux->width + mux->shift - 1, mux->shift);
-	regmap_write(common->regmap, common->reg,
-			  reg | (index << mux->shift));
-
-	return 0;
+	return regmap_update_bits(common->regmap, common->reg,
+				  GENMASK(mux->width + mux->shift - 1, mux->shift),
+				  index << mux->shift);
 }
 EXPORT_SYMBOL_GPL(sprd_mux_helper_set_parent);
 
