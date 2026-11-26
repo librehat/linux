@@ -149,6 +149,36 @@
 			no-map;
 		};
 
+		/*
+		 * TrustZone-firewalled SVP/DRM, FaceID, VDSP, and display carveouts
+		 * from stock live FDT. Must be no-map so buddy/CMA never allocate
+		 * pages in firewalled DDR (non-secure writes are dropped / read 0).
+		 */
+		drm-mem@e32ae000 {
+			reg = <0x00 0xe32ae000 0x00 0xc800000>;
+			no-map;
+		};
+
+		faceid-mem@efaae000 {
+			reg = <0x00 0xefaae000 0x00 0x500000>;
+			no-map;
+		};
+
+		vdsp-mem@f09ae000 {
+			reg = <0x00 0xf09ae000 0x00 0x3700000>;
+			no-map;
+		};
+
+		framebuffer-mem@fd708000 {
+			reg = <0x00 0xfd708000 0x00 0x1e5a000>;
+			no-map;
+		};
+
+		writeback-mem@ff562000 {
+			reg = <0x00 0xff562000 0x00 0xa1e000>;
+			no-map;
+		};
+
 		/* Ramoops / pstore persistent crash log buffer matching recovery FDT */
 		ramoops: ramoops@fff80000 {
 			compatible = "ramoops";
