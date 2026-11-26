@@ -139,6 +139,11 @@ static const u32 dpu_formats[] = {
 	DRM_FORMAT_BGR565,
 };
 
+static const u64 dpu_modifiers[] = {
+	DRM_FORMAT_MOD_LINEAR,
+	DRM_FORMAT_MOD_INVALID
+};
+
 static inline void lay_wr(struct ums512_dpu *dpu, unsigned int idx,
 			  u32 reg, u32 val)
 {
@@ -208,7 +213,7 @@ static void dpu_plane_atomic_update(struct drm_plane *plane,
 	struct ums512_dpu *dpu = to_dpu(plane->dev);
 	struct drm_plane_state *s = drm_atomic_get_new_plane_state(state, plane);
 	struct drm_framebuffer *fb = s->fb;
-	unsigned int idx = s->normalized_zpos;
+	unsigned int idx = plane->index;
 	u32 w, h, x, y, ctrl;
 	dma_addr_t addr;
 
@@ -249,9 +254,14 @@ static void dpu_plane_atomic_disable(struct drm_plane *plane,
 				     struct drm_atomic_commit *state)
 {
 	struct ums512_dpu *dpu = to_dpu(plane->dev);
-	struct drm_plane_state *old = drm_atomic_get_old_plane_state(state, plane);
 
-	lay_wr(dpu, old->normalized_zpos, REG_LAY_CTRL, 0);
+	lay_wr(dpu, plane->index, REG_LAY_CTRL, 0);
+}
+
+static bool dpu_plane_format_mod_supported(struct drm_plane *plane, u32 format,
+					   u64 modifier)
+{
+	return modifier == DRM_FORMAT_MOD_LINEAR;
 }
 
 static const struct drm_plane_helper_funcs dpu_plane_helper_funcs = {
@@ -266,6 +276,7 @@ static const struct drm_plane_funcs dpu_plane_funcs = {
 	.reset			= drm_atomic_helper_plane_reset,
 	.atomic_duplicate_state	= drm_atomic_helper_plane_duplicate_state,
 	.atomic_destroy_state	= drm_atomic_helper_plane_destroy_state,
+	.format_mod_supported	= dpu_plane_format_mod_supported,
 };
 
 /* ---- CRTC -------------------------------------------------------------- */
@@ -314,6 +325,7 @@ static void dpu_crtc_atomic_disable(struct drm_crtc *crtc,
 				    struct drm_atomic_commit *state)
 {
 	struct ums512_dpu *dpu = to_dpu(crtc->dev);
+	struct drm_pending_vblank_event *event;
 	unsigned int i;
 
 	/*
@@ -325,8 +337,19 @@ static void dpu_crtc_atomic_disable(struct drm_crtc *crtc,
 		lay_wr(dpu, i, REG_LAY_CTRL, 0);
 	dpu_latch(dpu);
 
-	drm_crtc_vblank_off(crtc);
 	dpu_int_update(dpu, 0, INT_UPDATE_DONE | INT_ERR);
+	synchronize_irq(dpu->irq);
+
+	spin_lock_irq(&crtc->dev->event_lock);
+	event = dpu->event;
+	dpu->event = NULL;
+	if (event)
+		drm_crtc_send_vblank_event(crtc, event);
+	spin_unlock_irq(&crtc->dev->event_lock);
+	if (event)
+		drm_crtc_vblank_put(crtc);
+
+	drm_crtc_vblank_off(crtc);
 
 	spin_lock_irq(&crtc->dev->event_lock);
 	if (crtc->state->event && !crtc->state->active) {
@@ -582,7 +605,7 @@ static int dpu_probe(struct platform_device *pdev)
 						   1, &dpu_plane_funcs,
 						   dpu_formats,
 						   ARRAY_SIZE(dpu_formats),
-						   NULL, type, NULL);
+						   dpu_modifiers, type, NULL);
 		if (IS_ERR(plane))
 			return PTR_ERR(plane);
 		drm_plane_helper_add(plane, &dpu_plane_helper_funcs);
