@@ -176,6 +176,29 @@ void panfrost_gem_teardown_mappings_locked(struct panfrost_gem_object *bo)
 		panfrost_gem_teardown_mapping(mapping);
 }
 
+static int panfrost_gem_ensure_willneed(struct panfrost_gem_object *bo)
+{
+	struct drm_gem_object *obj = &bo->base.base;
+	struct panfrost_device *pfdev = to_panfrost_device(obj->dev);
+	int ret;
+
+	ret = dma_resv_lock_interruptible(obj->resv, NULL);
+	if (ret)
+		return ret;
+
+	mutex_lock(&pfdev->shrinker_lock);
+	if (bo->base.madv < 0) {
+		ret = -EINVAL;
+	} else if (bo->base.madv != PANFROST_MADV_WILLNEED) {
+		bo->base.madv = PANFROST_MADV_WILLNEED;
+		list_del_init(&bo->base.madv_list);
+	}
+	mutex_unlock(&pfdev->shrinker_lock);
+	dma_resv_unlock(obj->resv);
+
+	return ret;
+}
+
 int panfrost_gem_open(struct drm_gem_object *obj, struct drm_file *file_priv)
 {
 	int ret;
@@ -185,6 +208,10 @@ int panfrost_gem_open(struct drm_gem_object *obj, struct drm_file *file_priv)
 	unsigned long color = bo->noexec ? PANFROST_BO_NOEXEC : 0;
 	struct panfrost_file_priv *priv = file_priv->driver_priv;
 	struct panfrost_gem_mapping *mapping;
+
+	ret = panfrost_gem_ensure_willneed(bo);
+	if (ret)
+		return ret;
 
 	mapping = kzalloc_obj(*mapping);
 	if (!mapping)
@@ -380,6 +407,7 @@ static struct dma_buf *
 panfrost_gem_prime_export(struct drm_gem_object *obj, int flags)
 {
 	struct drm_device *dev = obj->dev;
+	struct panfrost_gem_object *bo = to_panfrost_bo(obj);
 	struct dma_buf_export_info exp_info = {
 		.exp_name = KBUILD_MODNAME,
 		.owner = THIS_MODULE,
@@ -389,6 +417,11 @@ panfrost_gem_prime_export(struct drm_gem_object *obj, int flags)
 		.priv = obj,
 		.resv = obj->resv,
 	};
+	int ret;
+
+	ret = panfrost_gem_ensure_willneed(bo);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return drm_gem_dmabuf_export(dev, &exp_info);
 }
