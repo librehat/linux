@@ -471,6 +471,10 @@ static int panfrost_ioctl_madvise(struct drm_device *dev, void *data,
 	struct panfrost_gem_object *bo;
 	int ret = 0;
 
+	if (args->madv != PANFROST_MADV_WILLNEED &&
+	    args->madv != PANFROST_MADV_DONTNEED)
+		return -EINVAL;
+
 	gem_obj = drm_gem_object_lookup(file_priv, args->handle);
 	if (!gem_obj) {
 		DRM_DEBUG("Failed to look up GEM BO %d\n", args->handle);
@@ -494,13 +498,17 @@ static int panfrost_ioctl_madvise(struct drm_device *dev, void *data,
 
 		/*
 		 * If we want to mark the BO purgeable, there must be only one
-		 * user: the caller FD.
+		 * user: the caller FD, and it must not be shared via PRIME or
+		 * flink.
 		 * We could do something smarter and mark the BO purgeable only
 		 * when all its users have marked it purgeable, but globally
 		 * visible/shared BOs are likely to never be marked purgeable
 		 * anyway, so let's not bother.
 		 */
 		if (!list_is_singular(&bo->mappings.list) ||
+		    READ_ONCE(gem_obj->dma_buf) ||
+		    drm_gem_is_imported(gem_obj) ||
+		    READ_ONCE(gem_obj->name) ||
 		    WARN_ON_ONCE(first->mmu != priv->mmu)) {
 			ret = -EINVAL;
 			goto out_unlock_mappings;
