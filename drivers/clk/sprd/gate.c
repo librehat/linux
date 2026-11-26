@@ -13,19 +13,12 @@
 static void clk_gate_toggle(const struct sprd_gate *sg, bool en)
 {
 	const struct sprd_clk_common *common = &sg->common;
-	unsigned int reg;
 	bool set = sg->flags & CLK_GATE_SET_TO_DISABLE ? true : false;
 
 	set ^= en;
 
-	regmap_read(common->regmap, common->reg, &reg);
-
-	if (set)
-		reg |= sg->enable_mask;
-	else
-		reg &= ~sg->enable_mask;
-
-	regmap_write(common->regmap, common->reg, reg);
+	regmap_update_bits(common->regmap, common->reg, sg->enable_mask,
+			   set ? sg->enable_mask : 0);
 }
 
 static void clk_sc_gate_toggle(const struct sprd_gate *sg, bool en)
