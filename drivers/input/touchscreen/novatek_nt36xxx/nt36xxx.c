@@ -3518,6 +3518,9 @@ static int32_t nvt_ts_suspend(struct device *dev)
 	nvt_esd_check_enable(false);
 #endif /* #if NVT_TOUCH_ESD_PROTECT */
 
+	if (ts->nvt_charger_notify_wq)
+		cancel_work_sync(&ts->charger_notify_work);
+
 	input_info(true, &ts->client->dev, "%s  : start\n", __func__);
 
 	nvt_irq_enable(false);
@@ -3552,11 +3555,14 @@ static int32_t nvt_ts_suspend(struct device *dev)
 	} else {
 		if (!IS_ERR_OR_NULL(ts->platdata->pinctrl))
 			pinctrl_configure(ts, false);
-		/* DSTB enter */
-		buf[0] = EVENT_MAP_HOST_CMD;
-		buf[1] = 0x11;
-		CTP_SPI_WRITE(ts->client, buf, 2);
 
+		/*
+		 * On bootloader-adopted DSI (ums512_dpu_kms), display RESX is
+		 * never asserted on resume. Entering SPI DSTB (0x11) without a
+		 * subsequent hardware RESX traps the shared NT36523B TDDI MCU in
+		 * 0xA1/0xFD reset loops on resume; low-power sleep is handled by
+		 * DDIC DSI 0x28/0x10 Sleep-In instead.
+		 */
 		ts->power_status = POWER_OFF_STATUS;
 		input_info(true, &ts->client->dev, "%s: power off %d\n", __func__, ts->power_status);
 	}
@@ -3605,9 +3611,11 @@ skip_cmd:
 
 	nvt_ts_print_coord(ts);
 
-	msleep(50);
+	if (ts->aot_enable || ts->lcdoff_test)
+		msleep(50);
 	input_info(true, &ts->client->dev, "%s : %s 0x%02X\n", __func__,
-			ts->aot_enable ? "Enter lpwg mode" : "Enter dstb mode", ts->aot_enable);
+			ts->aot_enable ? "Enter lpwg mode" : "Touch suspended (no DSTB)",
+			ts->aot_enable);
 
 	cancel_delayed_work(&ts->work_print_info);
 	nvt_print_info();
@@ -3674,7 +3682,7 @@ static int32_t nvt_ts_resume(struct device *dev)
 	gpio_set_value(ts->reset_gpio, 1);
 #endif
 	/*Tab A8 code for AX6300DEV-1494 by luxinjun at 2021/11/03 start*/
-	if (nvt_update_firmware(ts->platdata->firmware_name, 0)) {
+	if (nvt_update_firmware(ts->platdata->firmware_name, 1)) {
 		input_err(true, &ts->client->dev, "download firmware failed, ignore check fw state\n");
 	} else {
 		nvt_check_fw_reset_state(RESET_STATE_NORMAL_RUN);
@@ -3888,7 +3896,7 @@ static void nvt_ts_pm_complete(struct device *dev)
 	 */
 	if (ts->nvt_resume_wq)
 		queue_delayed_work(ts->nvt_resume_wq, &ts->nvt_resume_work,
-				   msecs_to_jiffies(30));
+				   msecs_to_jiffies(50));
 	else
 		nvt_ts_resume(dev);
 }
