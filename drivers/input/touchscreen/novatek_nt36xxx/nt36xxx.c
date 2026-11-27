@@ -2992,11 +2992,7 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 		}
 	}
 
-#if PROXIMITY_FUNCTION
-//comment this if condition due to LPWG also need this feature
-//	if (ts->platdata->support_ear_detect)
-#endif
-		device_init_wakeup(&ts->input_dev->dev, 1);
+	device_init_wakeup(&ts->input_dev->dev, ts->aot_enable ? 1 : 0);
 	/*#Tab A8 code for AX6300DEV-3657 by fengzhigang at 2021/12/09 start*/
 	nvt_update_module_info();
 	/*#Tab A8 code for AX6300DEV-3657 by fengzhigang at 2021/12/09 end*/
@@ -3554,7 +3550,7 @@ static int32_t nvt_ts_suspend(struct device *dev)
 
 		input_info(true, &ts->client->dev, "%s: lpm mode %d\n", __func__, ts->power_status);
 	} else {
-		if (!IS_ERR(ts->platdata->pinctrl))
+		if (!IS_ERR_OR_NULL(ts->platdata->pinctrl))
 			pinctrl_configure(ts, false);
 		/* DSTB enter */
 		buf[0] = EVENT_MAP_HOST_CMD;
@@ -3663,7 +3659,7 @@ static int32_t nvt_ts_resume(struct device *dev)
 	//ts->prox_power_off = 0;
 #endif
 
-	if (!IS_ERR(ts->platdata->pinctrl))
+	if (!IS_ERR_OR_NULL(ts->platdata->pinctrl))
 		pinctrl_configure(ts, true);
 
 	if (ts->power_status != POWER_OFF_STATUS) {
@@ -3858,9 +3854,13 @@ static int nvt_ts_pm_suspend(struct device *dev)
 {
 	input_info(true, &ts->client->dev, "%s : start\n", __func__);
 
+	if (ts->nvt_resume_wq)
+		cancel_delayed_work_sync(&ts->nvt_resume_work);
+
+	nvt_ts_suspend(dev);
+
 	ts->dev_pm_suspend = true;
-//	reinit_completion(&ts->dev_pm_resume_completion);
-	init_completion(&ts->dev_pm_resume_completion);
+	reinit_completion(&ts->dev_pm_resume_completion);
 
 	input_info(true, &ts->client->dev, "%s : end\n", __func__);
 	return 0;
@@ -3871,15 +3871,32 @@ static int nvt_ts_pm_resume(struct device *dev)
 	input_info(true, &ts->client->dev, "%s : start\n", __func__);
 
 	ts->dev_pm_suspend = false;
-	complete(&ts->dev_pm_resume_completion);
+	complete_all(&ts->dev_pm_resume_completion);
 
 	input_info(true, &ts->client->dev, "%s : end\n", __func__);
 	return 0;
 }
 
+static void nvt_ts_pm_complete(struct device *dev)
+{
+	if (ts->power_status == POWER_ON_STATUS)
+		return;
+
+	/*
+	 * Defer FW host-download until after DPU resume and userspace thaw so
+	 * DDIC sleep-out has finished and SPI controller/firmware are ready.
+	 */
+	if (ts->nvt_resume_wq)
+		queue_delayed_work(ts->nvt_resume_wq, &ts->nvt_resume_work,
+				   msecs_to_jiffies(30));
+	else
+		nvt_ts_resume(dev);
+}
+
 static const struct dev_pm_ops nvt_ts_dev_pm_ops = {
 	.suspend = nvt_ts_pm_suspend,
 	.resume = nvt_ts_pm_resume,
+	.complete = nvt_ts_pm_complete,
 };
 #endif /* #ifdef CONFIG_PM */
 
