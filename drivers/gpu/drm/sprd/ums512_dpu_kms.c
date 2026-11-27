@@ -21,15 +21,21 @@
  */
 
 #include <linux/aperture.h>
+#include <linux/backlight.h>
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/dma-mapping.h>
+#include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
+#include <linux/pm.h>
+#include <video/mipi_display.h>
 
 #include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic.h>
@@ -49,11 +55,16 @@
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_managed.h>
+#include <drm/drm_modeset_helper.h>
 #include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
+
+static bool panel_sleep = true;
+module_param(panel_sleep, bool, 0644);
+MODULE_PARM_DESC(panel_sleep, "Send MIPI-DSI 0x28/0x10 sleep-in during system suspend (default: true)");
 
 #define DRIVER_NAME	"ums512-dpu"
 #define DRIVER_DESC	"Unisoc UMS512 DPU (bootloader-initialised DSI)"
@@ -110,10 +121,33 @@
 
 #define NUM_PLANES		4
 
+/* ---- Unisoc DSI r3p1 host registers (LP cmd TX during video blanking) --- */
+#define DSI_REG_VID_MODE_CFG		0x38
+#define DSI_VID_LP_CMD_EN		BIT(15)
+#define DSI_REG_GEN_HDR			0x6c
+#define DSI_REG_GEN_PLD_DATA		0x70
+#define DSI_REG_CMD_MODE_STATUS		0x98
+#define DSI_GEN_WDATA_FIFO_EMPTY	BIT(3)
+#define DSI_GEN_CMD_FIFO_EMPTY		BIT(5)
+
+enum dpu_panel_type {
+	DPU_PANEL_NT36523B = 0,
+	DPU_PANEL_HX83102E,
+	DPU_PANEL_FT8201AB,
+};
+
+struct dpu_dsi_cmd {
+	u8 type;
+	u8 len;
+	u8 data[2];
+	u16 delay_ms;
+};
+
 struct ums512_dpu {
 	struct drm_device drm;
 	void __iomem *base;
 	void __iomem *mmu;
+	void __iomem *dsi;
 	int irq;
 
 	struct drm_crtc crtc;
@@ -122,6 +156,12 @@ struct ums512_dpu {
 	struct drm_display_mode mode;
 	u32 width_mm, height_mm;
 
+	struct backlight_device *bl_dev;
+	struct mutex dsi_lock;		/* serializes DSI TX & panel state */
+	enum dpu_panel_type panel_type;
+	bool crtc_enabled;
+	bool panel_asleep;
+
 	spinlock_t lock;		/* protects event, int_en */
 	struct drm_pending_vblank_event *event;
 	u32 int_en;
@@ -129,6 +169,280 @@ struct ums512_dpu {
 };
 
 #define to_dpu(dev) container_of(dev, struct ums512_dpu, drm)
+
+/* ---- MIPI-DSI DCS panel & backlight control ---------------------------- */
+
+static enum dpu_panel_type dpu_detect_panel_type(void)
+{
+	if (strstr(saved_command_line, "hx83102e"))
+		return DPU_PANEL_HX83102E;
+	if (strstr(saved_command_line, "ft8201ab"))
+		return DPU_PANEL_FT8201AB;
+	return DPU_PANEL_NT36523B;
+}
+
+static const char *dpu_panel_name(enum dpu_panel_type type)
+{
+	switch (type) {
+	case DPU_PANEL_HX83102E:
+		return "hx83102e";
+	case DPU_PANEL_FT8201AB:
+		return "ft8201ab";
+	case DPU_PANEL_NT36523B:
+	default:
+		return "nt36523b";
+	}
+}
+
+static int dpu_dsi_write_locked(struct ums512_dpu *dpu, u8 type,
+				const u8 *buf, size_t len)
+{
+	u32 val, hdr;
+	size_t i;
+	int ret;
+
+	if (!dpu->dsi)
+		return -ENODEV;
+
+	/*
+	 * Ensure LP command transmission during video blanking without
+	 * touching SOFT_RESET, DSI_MODE_CFG, or PHY_INTERFACE_CTRL.
+	 */
+	val = readl(dpu->dsi + DSI_REG_VID_MODE_CFG);
+	if (!(val & DSI_VID_LP_CMD_EN))
+		writel(val | DSI_VID_LP_CMD_EN, dpu->dsi + DSI_REG_VID_MODE_CFG);
+
+	if (type == MIPI_DSI_DCS_LONG_WRITE ||
+	    type == MIPI_DSI_GENERIC_LONG_WRITE) {
+		ret = readl_poll_timeout(dpu->dsi + DSI_REG_CMD_MODE_STATUS,
+					 val, val & DSI_GEN_WDATA_FIFO_EMPTY,
+					 10, 50000);
+		if (ret) {
+			drm_err_ratelimited(&dpu->drm,
+					    "DSI TX payload FIFO timeout\n");
+			return ret;
+		}
+
+		for (i = 0; i < len; i += 4) {
+			u32 payload = 0;
+			size_t j;
+
+			for (j = 0; j < 4 && (i + j) < len; j++)
+				payload |= (u32)buf[i + j] << (j * 8);
+			writel(payload, dpu->dsi + DSI_REG_GEN_PLD_DATA);
+		}
+
+		hdr = type | ((len & 0xff) << 8) | (((len >> 8) & 0xff) << 16);
+	} else {
+		u8 b0 = len > 0 ? buf[0] : 0;
+		u8 b1 = len > 1 ? buf[1] : 0;
+
+		hdr = type | ((u32)b0 << 8) | ((u32)b1 << 16);
+	}
+
+	ret = readl_poll_timeout(dpu->dsi + DSI_REG_CMD_MODE_STATUS, val,
+				 val & DSI_GEN_CMD_FIFO_EMPTY, 10, 50000);
+	if (ret) {
+		drm_err_ratelimited(&dpu->drm, "DSI TX cmd FIFO timeout\n");
+		return ret;
+	}
+
+	writel(hdr, dpu->dsi + DSI_REG_GEN_HDR);
+
+	ret = readl_poll_timeout(dpu->dsi + DSI_REG_CMD_MODE_STATUS, val,
+				 val & DSI_GEN_CMD_FIFO_EMPTY, 10, 50000);
+	if (ret)
+		drm_err_ratelimited(&dpu->drm, "DSI TX drain timeout\n");
+
+	return ret;
+}
+
+static int dpu_dsi_send_seq_locked(struct ums512_dpu *dpu,
+				   const struct dpu_dsi_cmd *cmds, size_t n)
+{
+	size_t i;
+	int ret;
+
+	for (i = 0; i < n; i++) {
+		ret = dpu_dsi_write_locked(dpu, cmds[i].type, cmds[i].data,
+					   cmds[i].len);
+		if (ret)
+			return ret;
+		if (cmds[i].delay_ms)
+			msleep(cmds[i].delay_ms);
+	}
+
+	return 0;
+}
+
+static const struct dpu_dsi_cmd nt36523b_unlock_cmds[] = {
+	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xff, 0x10 }, 0 },
+	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf0, 0x55 }, 0 },
+	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf1, 0xaa }, 0 },
+	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf2, 0x66 }, 0 },
+};
+
+static const struct dpu_dsi_cmd nt36523b_lock_cmds[] = {
+	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xff, 0x10 }, 0 },
+	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf0, 0xaa }, 0 },
+	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf1, 0x55 }, 0 },
+	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf2, 0x99 }, 0 },
+};
+
+static int dpu_bl_set_hw_locked(struct ums512_dpu *dpu, u8 level)
+{
+	u8 cmd12[3];
+	u8 cmd8[2];
+	u16 val12;
+	int ret;
+
+	if (!dpu->dsi)
+		return 0;
+
+	if (dpu->panel_type == DPU_PANEL_FT8201AB) {
+		cmd8[0] = MIPI_DCS_SET_DISPLAY_BRIGHTNESS;
+		cmd8[1] = level;
+		return dpu_dsi_write_locked(dpu, MIPI_DSI_DCS_SHORT_WRITE_PARAM,
+					    cmd8, sizeof(cmd8));
+	}
+
+	val12 = level ? min_t(u16, ((u16)level << 4) | (level >> 4), 0x0ffe) : 0;
+	cmd12[0] = MIPI_DCS_SET_DISPLAY_BRIGHTNESS;
+	cmd12[1] = val12 >> 8;
+	cmd12[2] = val12 & 0xff;
+
+	if (dpu->panel_type == DPU_PANEL_NT36523B) {
+		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_unlock_cmds,
+					      ARRAY_SIZE(nt36523b_unlock_cmds));
+		if (ret)
+			return ret;
+	}
+
+	ret = dpu_dsi_write_locked(dpu, MIPI_DSI_DCS_LONG_WRITE,
+				   cmd12, sizeof(cmd12));
+
+	if (dpu->panel_type == DPU_PANEL_NT36523B && !ret)
+		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_lock_cmds,
+					      ARRAY_SIZE(nt36523b_lock_cmds));
+
+	return ret;
+}
+
+static int dpu_bl_update_status(struct backlight_device *bl)
+{
+	struct ums512_dpu *dpu = bl_get_data(bl);
+	int level = backlight_get_brightness(bl);
+	int ret = 0;
+
+	mutex_lock(&dpu->dsi_lock);
+	if (dpu->crtc_enabled && !dpu->panel_asleep)
+		ret = dpu_bl_set_hw_locked(dpu, clamp_t(int, level, 0, 255));
+	mutex_unlock(&dpu->dsi_lock);
+
+	return ret;
+}
+
+static const struct backlight_ops dpu_bl_ops = {
+	.update_status = dpu_bl_update_status,
+};
+
+static const struct dpu_dsi_cmd nt36523b_sleep_in_cmds[] = {
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_SET_DISPLAY_OFF }, 50 },
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_ENTER_SLEEP_MODE }, 120 },
+};
+
+static const struct dpu_dsi_cmd nt36523b_sleep_out_cmds[] = {
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_EXIT_SLEEP_MODE }, 100 },
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_SET_DISPLAY_ON }, 20 },
+};
+
+static const struct dpu_dsi_cmd hx83102e_sleep_in_cmds[] = {
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_SET_DISPLAY_OFF }, 20 },
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_ENTER_SLEEP_MODE }, 120 },
+};
+
+static const struct dpu_dsi_cmd hx83102e_sleep_out_cmds[] = {
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_EXIT_SLEEP_MODE }, 50 },
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_SET_DISPLAY_ON }, 20 },
+};
+
+static const struct dpu_dsi_cmd ft8201ab_sleep_in_cmds[] = {
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_SET_DISPLAY_OFF }, 20 },
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_ENTER_SLEEP_MODE }, 140 },
+};
+
+static const struct dpu_dsi_cmd ft8201ab_sleep_out_cmds[] = {
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_EXIT_SLEEP_MODE }, 90 },
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_SET_DISPLAY_ON }, 20 },
+};
+
+static void dpu_panel_sleep_in_locked(struct ums512_dpu *dpu)
+{
+	int ret = 0;
+
+	if (!dpu->dsi || dpu->panel_asleep)
+		return;
+
+	dpu_bl_set_hw_locked(dpu, 0);
+
+	if (!panel_sleep)
+		return;
+
+	switch (dpu->panel_type) {
+	case DPU_PANEL_HX83102E:
+		ret = dpu_dsi_send_seq_locked(dpu, hx83102e_sleep_in_cmds,
+					      ARRAY_SIZE(hx83102e_sleep_in_cmds));
+		break;
+	case DPU_PANEL_FT8201AB:
+		ret = dpu_dsi_send_seq_locked(dpu, ft8201ab_sleep_in_cmds,
+					      ARRAY_SIZE(ft8201ab_sleep_in_cmds));
+		break;
+	case DPU_PANEL_NT36523B:
+	default:
+		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_lock_cmds,
+					      ARRAY_SIZE(nt36523b_lock_cmds));
+		if (!ret)
+			ret = dpu_dsi_send_seq_locked(dpu, nt36523b_sleep_in_cmds,
+						      ARRAY_SIZE(nt36523b_sleep_in_cmds));
+		break;
+	}
+
+	if (ret)
+		drm_warn(&dpu->drm, "panel sleep-in failed (%d)\n", ret);
+	else
+		dpu->panel_asleep = true;
+}
+
+static void dpu_panel_sleep_out_locked(struct ums512_dpu *dpu)
+{
+	int ret = 0;
+
+	if (!dpu->dsi || !dpu->panel_asleep)
+		return;
+
+	switch (dpu->panel_type) {
+	case DPU_PANEL_HX83102E:
+		ret = dpu_dsi_send_seq_locked(dpu, hx83102e_sleep_out_cmds,
+					      ARRAY_SIZE(hx83102e_sleep_out_cmds));
+		break;
+	case DPU_PANEL_FT8201AB:
+		ret = dpu_dsi_send_seq_locked(dpu, ft8201ab_sleep_out_cmds,
+					      ARRAY_SIZE(ft8201ab_sleep_out_cmds));
+		break;
+	case DPU_PANEL_NT36523B:
+	default:
+		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_sleep_out_cmds,
+					      ARRAY_SIZE(nt36523b_sleep_out_cmds));
+		if (!ret)
+			ret = dpu_dsi_send_seq_locked(dpu, nt36523b_unlock_cmds,
+						      ARRAY_SIZE(nt36523b_unlock_cmds));
+		break;
+	}
+
+	if (ret)
+		drm_warn(&dpu->drm, "panel sleep-out failed (%d)\n", ret);
+	dpu->panel_asleep = false;
+}
 
 static const u32 dpu_formats[] = {
 	DRM_FORMAT_XRGB8888,
@@ -319,6 +633,14 @@ static void dpu_crtc_atomic_enable(struct drm_crtc *crtc,
 	       dpu->base + REG_DPU_CTRL);
 	dpu_int_update(dpu, INT_UPDATE_DONE | INT_ERR, 0);
 	drm_crtc_vblank_on(crtc);
+
+	mutex_lock(&dpu->dsi_lock);
+	dpu->crtc_enabled = true;
+	if (!dpu->panel_asleep && dpu->bl_dev)
+		dpu_bl_set_hw_locked(dpu, clamp_t(int,
+						  backlight_get_brightness(dpu->bl_dev),
+						  0, 255));
+	mutex_unlock(&dpu->dsi_lock);
 }
 
 static void dpu_crtc_atomic_disable(struct drm_crtc *crtc,
@@ -328,10 +650,16 @@ static void dpu_crtc_atomic_disable(struct drm_crtc *crtc,
 	struct drm_pending_vblank_event *event;
 	unsigned int i;
 
+	mutex_lock(&dpu->dsi_lock);
+	dpu->crtc_enabled = false;
+	if (dpu->dsi && !dpu->panel_asleep)
+		dpu_bl_set_hw_locked(dpu, 0);
+	mutex_unlock(&dpu->dsi_lock);
+
 	/*
 	 * Stopping the DPU would break the bootloader-owned DSI video stream
-	 * and we cannot restart the panel, so "off" means: blank all layers
-	 * and keep scanning out the black background.
+	 * and we cannot restart the panel, so "off" means: turn off backlight,
+	 * blank all layers, and keep scanning out the black background.
 	 */
 	for (i = 0; i < LAY_HW_MAX; i++)
 		lay_wr(dpu, i, REG_LAY_CTRL, 0);
@@ -552,6 +880,9 @@ static int dpu_probe(struct platform_device *pdev)
 		return PTR_ERR(dpu);
 	drm = &dpu->drm;
 	spin_lock_init(&dpu->lock);
+	mutex_init(&dpu->dsi_lock);
+	dpu->crtc_enabled = true;
+	dpu->panel_type = dpu_detect_panel_type();
 	platform_set_drvdata(pdev, drm);
 
 	/* The DPU master port carries 32-bit addresses. */
@@ -566,6 +897,11 @@ static int dpu_probe(struct platform_device *pdev)
 	dpu->mmu = devm_platform_ioremap_resource(pdev, 1);
 	if (IS_ERR(dpu->mmu))
 		dpu->mmu = NULL;
+	if (platform_get_resource(pdev, IORESOURCE_MEM, 2)) {
+		dpu->dsi = devm_platform_ioremap_resource(pdev, 2);
+		if (IS_ERR(dpu->dsi))
+			dpu->dsi = NULL;
+	}
 
 	ret = devm_clk_bulk_get_all_enabled(dev, &clks);
 	if (ret < 0)
@@ -689,6 +1025,29 @@ static int dpu_probe(struct platform_device *pdev)
 
 	drm_info(drm, "DPU version %08x\n", readl(dpu->base + REG_DPU_VERSION));
 
+	if (dpu->dsi) {
+		struct backlight_properties bl_props = {
+			.type = BACKLIGHT_RAW,
+			.max_brightness = 255,
+			.brightness = 150,
+		};
+
+		dpu->bl_dev = devm_backlight_device_register(dev,
+							     "ums512-dpu-backlight",
+							     dev, dpu,
+							     &dpu_bl_ops,
+							     &bl_props);
+		if (IS_ERR(dpu->bl_dev)) {
+			drm_warn(drm, "failed to register backlight (%ld)\n",
+				 PTR_ERR(dpu->bl_dev));
+			dpu->bl_dev = NULL;
+		} else {
+			drm_info(drm, "MIPI-DSI DCS backlight registered (panel %s)\n",
+				 dpu_panel_name(dpu->panel_type));
+			backlight_update_status(dpu->bl_dev);
+		}
+	}
+
 	ret = drm_dev_register(drm, 0);
 	if (ret)
 		return ret;
@@ -710,6 +1069,37 @@ static void dpu_shutdown(struct platform_device *pdev)
 	drm_atomic_helper_shutdown(platform_get_drvdata(pdev));
 }
 
+static int dpu_pm_suspend(struct device *dev)
+{
+	struct drm_device *drm = dev_get_drvdata(dev);
+	struct ums512_dpu *dpu = to_dpu(drm);
+	int ret;
+
+	ret = drm_mode_config_helper_suspend(drm);
+	if (ret)
+		return ret;
+
+	mutex_lock(&dpu->dsi_lock);
+	dpu_panel_sleep_in_locked(dpu);
+	mutex_unlock(&dpu->dsi_lock);
+
+	return 0;
+}
+
+static int dpu_pm_resume(struct device *dev)
+{
+	struct drm_device *drm = dev_get_drvdata(dev);
+	struct ums512_dpu *dpu = to_dpu(drm);
+
+	mutex_lock(&dpu->dsi_lock);
+	dpu_panel_sleep_out_locked(dpu);
+	mutex_unlock(&dpu->dsi_lock);
+
+	return drm_mode_config_helper_resume(drm);
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(dpu_pm_ops, dpu_pm_suspend, dpu_pm_resume);
+
 static const struct of_device_id dpu_of_match[] = {
 	{ .compatible = "sprd,ums512-dpu-kms" },
 	{ }
@@ -722,6 +1112,7 @@ static struct platform_driver dpu_platform_driver = {
 	.shutdown	= dpu_shutdown,
 	.driver = {
 		.name		= DRIVER_NAME,
+		.pm		= pm_sleep_ptr(&dpu_pm_ops),
 		.of_match_table	= dpu_of_match,
 	},
 };
