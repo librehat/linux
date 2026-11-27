@@ -11,6 +11,7 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 
 #include <dt-bindings/clock/sprd,ums512-clk.h>
@@ -2185,6 +2186,11 @@ static int ums512_clk_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	pm_runtime_set_active(&pdev->dev);
+	ret = devm_pm_runtime_enable(&pdev->dev);
+	if (ret)
+		return ret;
+
 	return sprd_clk_probe(&pdev->dev, desc->hw_clks);
 }
 
@@ -2192,6 +2198,7 @@ static struct platform_driver ums512_clk_driver = {
 	.probe	= ums512_clk_probe,
 	.driver	= {
 		.name	= "ums512-clk",
+		.pm	= pm_ptr(&sprd_clk_pm_ops),
 		.of_match_table	= sprd_ums512_clk_ids,
 	},
 };
