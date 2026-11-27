@@ -891,7 +891,7 @@ static int j606f_boe_init_sequence(struct panel_info *pinfo)
 	return dsi_ctx.accum_err;
 }
 
-static int gtaba8_inx_init_sequence(struct panel_info *pinfo)
+static int gta8_inx_init_sequence(struct panel_info *pinfo)
 {
 	struct mipi_dsi_device *dsi = pinfo->dsi[0];
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
@@ -1245,7 +1245,7 @@ static const struct drm_display_mode j606f_boe_modes[] = {
 	},
 };
 
-static const struct drm_display_mode gtaba8_inx_modes[] = {
+static const struct drm_display_mode gta8_inx_modes[] = {
 	{
 		.clock = 170000,
 		.hdisplay = 1200,
@@ -1311,9 +1311,9 @@ static const struct panel_desc j606f_boe_desc = {
 	.has_dcs_backlight = true,
 };
 
-static const struct panel_desc gtaba8_inx_desc = {
-	.modes = gtaba8_inx_modes,
-	.num_modes = ARRAY_SIZE(gtaba8_inx_modes),
+static const struct panel_desc gta8_inx_desc = {
+	.modes = gta8_inx_modes,
+	.num_modes = ARRAY_SIZE(gta8_inx_modes),
 	.width_mm = 136,
 	.height_mm = 225,
 	.bpc = 8,
@@ -1323,7 +1323,7 @@ static const struct panel_desc gtaba8_inx_desc = {
 		      MIPI_DSI_CLOCK_NON_CONTINUOUS | MIPI_DSI_MODE_LPM,
 	.hs_rate = 1020000000,
 	.lp_rate = 20000000,
-	.init_sequence = gtaba8_inx_init_sequence,
+	.init_sequence = gta8_inx_init_sequence,
 	.has_dcs_backlight = true,
 };
 
@@ -1624,8 +1624,8 @@ static const struct of_device_id nt36523_of_match[] = {
 		.data = &j606f_boe_desc,
 	},
 	{
-		.compatible = "samsung,gtaba8-inx-nt36523b",
-		.data = &gtaba8_inx_desc,
+		.compatible = "samsung,gta8-inx-nt36523b",
+		.data = &gta8_inx_desc,
 	},
 	{
 		.compatible = "xiaomi,elish-boe-nt36523",
