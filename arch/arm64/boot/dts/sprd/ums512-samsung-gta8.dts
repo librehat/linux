@@ -378,6 +378,7 @@
 		clock-names = "core", "clk", "dpi", "dsi";
 		width-mm = <136>;
 		height-mm = <225>;
+		rotation = <90>;
 		sprd,boot-framebuffer = <&framebuffer0>;
 	};
 };
