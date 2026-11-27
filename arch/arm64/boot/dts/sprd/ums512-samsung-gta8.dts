@@ -19,7 +19,7 @@
 
 / {
 	model = "Samsung Galaxy Tab A8 10.5 (2021)";
-	compatible = "samsung,gtaba8", "sprd,ums512";
+	compatible = "samsung,gta8", "sprd,ums512";
 
 	/*
 	 * Matches stock base DTB sprd,sc-id. Note: LK still selects DTBO by
