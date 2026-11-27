@@ -268,8 +268,7 @@
 		m2-wakeup-ap-gpios = <&ap_gpio 32 GPIO_ACTIVE_HIGH>;
 		permit-ap-send-gpios = <&ap_gpio 121 GPIO_ACTIVE_HIGH>;
 		m2-to-ap-coexist-gpios = <&ap_gpio 119 GPIO_ACTIVE_HIGH>;
-		/* Use SDMA packet mode so CMD53 transfers stay single contiguous 512B-aligned buffers on sdhci-r11. */
-		data-irq;
+		/* Use external GPIO RX IRQ (m2-wakeup-ap) + SDMA packet mode on sdhci-r11. */
 		blksz-512;
 	};
 
@@ -369,7 +368,8 @@
 	display@20300000 {
 		compatible = "sprd,ums512-dpu-kms";
 		reg = <0x00 0x20300000 0x00 0x800>,
-		      <0x00 0x20300800 0x00 0x80>;
+		      <0x00 0x20300800 0x00 0x80>,
+		      <0x00 0x20400000 0x00 0x1000>;
 		interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&apahb_gate CLK_DISPC_EB>,
 			 <&ap_clk CLK_DISPC0>,
@@ -459,7 +459,6 @@
 	sprd,phy-delay-sd-uhs-sdr50 = <0x7f 0xf7 0xf5 0xf5>;
 	sd-uhs-sdr50;
 	sd-uhs-sdr104;
-	cap-sdio-irq;
 	keep-power-in-suspend;
 	status = "okay";
 };
