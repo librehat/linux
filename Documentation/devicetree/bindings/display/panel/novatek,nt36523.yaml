@@ -28,7 +28,7 @@ properties:
           - const: novatek,nt36523w
       - items:
           - enum:
-              - samsung,gtaba8-inx-nt36523b
+              - samsung,gta8-inx-nt36523b
           - const: novatek,nt36523b
 
   reg:

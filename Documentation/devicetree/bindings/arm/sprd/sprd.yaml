@@ -33,7 +33,7 @@ properties:
       - items:
           - enum:
               - sprd,ums512-1h10
-              - samsung,gtaba8
+              - samsung,gta8
           - const: sprd,ums512
 
       - items:
