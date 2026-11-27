@@ -246,10 +246,10 @@ static inline void _sdhci_sprd_set_clock(struct sdhci_host *host,
 	val = sdhci_readl(host, SDHCI_SPRD_REG_32_BUSY_POSI);
 	mask = SDHCI_SPRD_BIT_OUTR_CLK_AUTO_EN | SDHCI_SPRD_BIT_INNR_CLK_AUTO_EN;
 	/*
-	 * Enable CLK_AUTO when the clock is greater than 400K, except on
-	 * SDIO-capable hosts where gating the clock breaks in-band DAT1 IRQs.
+	 * Enable CLK_AUTO when the clock is greater than 400K, except when
+	 * in-band SDIO DAT1 IRQs are enabled (gating the clock blocks them).
 	 */
-	if (clk > 400000 && (host->mmc->caps2 & MMC_CAP2_NO_SDIO)) {
+	if (clk > 400000 && !(host->mmc->caps & MMC_CAP_SDIO_IRQ)) {
 		if (mask != (val & mask)) {
 			val |= mask;
 			sdhci_writel(host, val, SDHCI_SPRD_REG_32_BUSY_POSI);
