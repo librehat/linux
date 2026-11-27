@@ -57,6 +57,7 @@
 #include <drm/drm_managed.h>
 #include <drm/drm_modeset_helper.h>
 #include <drm/drm_modeset_helper_vtables.h>
+#include <drm/drm_of.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
@@ -875,6 +876,7 @@ static int dpu_probe(struct platform_device *pdev)
 	struct clk *dpi_clk;
 	struct device_node *fb_np;
 	struct resource fb_res;
+	enum drm_panel_orientation orientation;
 	unsigned int i;
 	int ret;
 
@@ -980,6 +982,16 @@ static int dpu_probe(struct platform_device *pdev)
 	ret = drm_connector_attach_encoder(&dpu->connector, &dpu->encoder);
 	if (ret)
 		return ret;
+
+	ret = drm_of_get_panel_orientation(dev->of_node, &orientation);
+	if (ret) {
+		drm_warn(drm, "invalid panel rotation property (%d)\n", ret);
+	} else {
+		ret = drm_connector_set_panel_orientation(&dpu->connector,
+							  orientation);
+		if (ret)
+			return ret;
+	}
 
 	ret = drm_vblank_init(drm, 1);
 	if (ret)

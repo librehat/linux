@@ -35,6 +35,12 @@ properties:
 
   height-mm: true
 
+  rotation:
+    description:
+      Display rotation in degrees counter clockwise (0, 90, 180, 270)
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [0, 90, 180, 270]
+
   sprd,boot-framebuffer:
     $ref: /schemas/types.yaml#/definitions/phandle
 
