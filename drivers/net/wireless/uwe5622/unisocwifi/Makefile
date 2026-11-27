@@ -41,7 +41,7 @@ ccflags-$(CONFIG_UNISOC_WIFI_PS) += -DUNISOC_WIFI_PS
 #######add .o file#####
 sprdwl_ng-objs += main.o cfg80211.o txrx.o cmdevt.o npi.o msg.o work.o vendor.o \
 				  tcp_ack.o mm.o reorder.o wl_core.o tx_msg.o rx_msg.o \
-				  wl_intf.o qos.o dbg_ini_util.o reg_domain.o
+				  wl_intf.o qos.o dbg_ini_util.o reg_domain.o sae.o
 sprdwl_ng-objs += defrag.o
 sprdwl_ng-objs += ibss.o
 sprdwl_ng-objs += nan.o

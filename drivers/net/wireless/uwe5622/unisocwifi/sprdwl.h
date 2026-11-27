@@ -44,6 +44,7 @@
 #include "rtt.h"
 #include "version.h"
 #include "tracer.h"
+#include "sae.h"
 
 #define SPRDWL_UNALIAGN		1
 #ifdef SPRDWL_UNALIAGN
@@ -115,9 +116,10 @@ struct sprdwl_vif {
 	u8 prwise_crypto;
 	u8 grp_crypto;
 	u8 key_index[2];
-	u8 key[2][4][WLAN_MAX_KEY_LEN];
-	u8 key_len[2][4];
+	u8 key[2][SPRDWL_MAX_KEY_INDEX + 1][WLAN_MAX_KEY_LEN];
+	u8 key_len[2][SPRDWL_MAX_KEY_INDEX + 1];
 	unsigned long mgmt_reg;
+	struct sprdwl_sae_ctx sae;
 
 	/* P2P stuff */
 	struct ieee80211_channel listen_channel;

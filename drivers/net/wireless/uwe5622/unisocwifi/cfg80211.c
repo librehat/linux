@@ -199,12 +199,7 @@ static struct ieee80211_channel sprdwl_5ghz_channels[] = {
 	CHAN5G(136, 0), CHAN5G(140, 0),
 	CHAN5G(144, 0), CHAN5G(149, 0),
 	CHAN5G(153, 0), CHAN5G(157, 0),
-	CHAN5G(161, 0), CHAN5G(165, 0),
-	CHAN5G(184, 0), CHAN5G(188, 0),
-	CHAN5G(192, 0), CHAN5G(196, 0),
-	CHAN5G(200, 0), CHAN5G(204, 0),
-	CHAN5G(208, 0), CHAN5G(212, 0),
-	CHAN5G(216, 0)
+	CHAN5G(161, 0), CHAN5G(165, 0)
 };
 
 static struct ieee80211_supported_band sprdwl_band_5ghz = {
@@ -650,6 +645,9 @@ static inline u8 sprdwl_parse_akm(u32 akm)
 	case WLAN_AKM_SUITE_8021X_SHA256:
 		ret = SPRDWL_AKM_SUITE_8021X_SHA256;
 		break;
+	case WLAN_AKM_SUITE_SAE:
+		ret = SPRDWL_AKM_SUITE_SAE;
+		break;
 	default:
 		ret = SPRDWL_AKM_SUITE_NONE;
 		break;
@@ -700,9 +698,8 @@ static int sprdwl_add_cipher_key(struct sprdwl_vif *vif, bool pairwise,
 	wl_ndev_log(L_DBG, vif->ndev, "%s %s key_index %d\n", __func__,
 		    pairwise ? "pairwise" : "group", key_index);
 
-	if (vif->key_len[pairwise][0] || vif->key_len[pairwise][1] ||
-	    vif->key_len[pairwise][2] || vif->key_len[pairwise][3]) {
-		*cipher_ptr = vif->prwise_crypto = sprdwl_parse_cipher(cipher);
+	if (key_index <= SPRDWL_MAX_KEY_INDEX && vif->key_len[pairwise][key_index]) {
+		*cipher_ptr = sprdwl_parse_cipher(cipher);
 
 		ret = sprdwl_add_key(vif->priv, vif->ctx_id,
 				     vif->key[pairwise][key_index],
@@ -721,6 +718,9 @@ static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct wireless_dev *wde
 				   struct key_params *params)
 {
 	struct sprdwl_vif *vif = netdev_priv(wdev->netdev);
+
+	if (key_index > SPRDWL_MAX_KEY_INDEX)
+		return -EINVAL;
 
 	vif->key_index[pairwise] = key_index;
 	vif->key_len[pairwise][key_index] = params->key_len;
@@ -744,6 +744,9 @@ static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct net_device *ndev,
 {
 	struct sprdwl_vif *vif = netdev_priv(ndev);
 
+	if (key_index > SPRDWL_MAX_KEY_INDEX)
+		return -EINVAL;
+
 	vif->key_index[pairwise] = key_index;
 	vif->key_len[pairwise][key_index] = params->key_len;
 	memcpy(vif->key[pairwise][key_index], params->key, params->key_len);
@@ -765,6 +768,9 @@ static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct net_device *ndev,
 				   struct key_params *params)
 {
 	struct sprdwl_vif *vif = netdev_priv(ndev);
+
+	if (key_index > SPRDWL_MAX_KEY_INDEX)
+		return -EINVAL;
 
 	vif->key_index[pairwise] = key_index;
 	vif->key_len[pairwise][key_index] = params->key_len;
@@ -2028,6 +2034,7 @@ static void sprdwl_disconnect_handle(struct sprdwl_vif *vif)
 	/* Clear bssid & ssid */
 	memset(vif->bssid, 0, sizeof(vif->bssid));
 	memset(vif->ssid, 0, sizeof(vif->ssid));
+	sprdwl_sae_reset(vif);
 #ifdef WMMAC_WFA_CERTIFICATION
 	reset_wmmac_parameters(vif->priv);
 	reset_wmmac_ts_info();
@@ -2063,6 +2070,7 @@ static int sprdwl_cfg80211_disconnect(struct wiphy *wiphy,
 	wl_ndev_log(L_DBG, ndev, "%s %s reason: %d\n", __func__, vif->ssid,
 		    reason_code);
 
+	sprdwl_sae_reset(vif);
 	vif->sm_state = SPRDWL_DISCONNECTING;
 
 #ifdef SYNC_DISCONNECT
@@ -2103,6 +2111,7 @@ static int sprdwl_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 	int is_wep = (sme->crypto.cipher_group == WLAN_CIPHER_SUITE_WEP40) ||
 	    (sme->crypto.cipher_group == WLAN_CIPHER_SUITE_WEP104);
 	int random_mac_flag;
+	bool is_sae;
 	int ret = -EPERM;
 
 	/*workround for bug 795430*/
@@ -2129,8 +2138,13 @@ static int sprdwl_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 		wl_ndev_log(L_DBG, ndev, "sm_state is SPRDWL_CONNECTING, disconnect first\n");
 		sprdwl_cfg80211_disconnect(wiphy, ndev, 3);
 	}
+	sprdwl_sae_reset(vif);
 
-	/* Set wps ie */
+	is_sae = (sme->auth_type == NL80211_AUTHTYPE_SAE) ||
+		 (sme->crypto.n_akm_suites &&
+		  sme->crypto.akm_suites[0] == WLAN_AKM_SUITE_SAE);
+
+	/* Set wps/assoc ie */
 	if (sme->ie_len > 0) {
 		wl_ndev_log(L_DBG, ndev, "set assoc req ie, len %zx\n", sme->ie_len);
 		ret = sprdwl_set_ie(vif->priv, vif->ctx_id, SPRDWL_IE_ASSOC_REQ,
@@ -2145,8 +2159,24 @@ static int sprdwl_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 	con.mfp_enable = sme->mfp;
 
 	wl_ndev_log(L_DBG, ndev, "auth type %#x\n", sme->auth_type);
-	if ((sme->auth_type == NL80211_AUTHTYPE_OPEN_SYSTEM) ||
-	    ((sme->auth_type == NL80211_AUTHTYPE_AUTOMATIC) && !is_wep))
+	if (is_sae) {
+		if (!sme->crypto.sae_pwd || !sme->crypto.sae_pwd_len) {
+			wl_ndev_log(L_ERR, ndev, "%s missing SAE password\n",
+				    __func__);
+			ret = -EINVAL;
+			goto err;
+		}
+		ret = sprdwl_sae_send_ie(vif, sme->crypto.sae_pwd,
+					 sme->crypto.sae_pwd_len);
+		if (ret)
+			goto err;
+		sprdwl_sae_save_req_ies(vif, sme->ie, sme->ie_len);
+		con.auth_type = SPRDWL_AUTH_SAE;
+		if (con.wpa_versions == NL80211_WPA_VERSION_3 ||
+		    con.wpa_versions == 0)
+			con.wpa_versions = NL80211_WPA_VERSION_2;
+	} else if ((sme->auth_type == NL80211_AUTHTYPE_OPEN_SYSTEM) ||
+		   ((sme->auth_type == NL80211_AUTHTYPE_AUTOMATIC) && !is_wep))
 		con.auth_type = SPRDWL_AUTH_OPEN;
 	else if ((sme->auth_type == NL80211_AUTHTYPE_SHARED_KEY) ||
 		 ((sme->auth_type == NL80211_AUTHTYPE_AUTOMATIC) && is_wep))
@@ -2306,6 +2336,13 @@ static int sprdwl_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 			vif->wps_flag = 0;
 		}
 
+		if (is_sae) {
+			vif->sae.connecting = true;
+			vif->sae.grp_cipher =
+				(vif->grp_crypto != SPRDWL_CIPHER_NONE) ?
+				vif->grp_crypto : SPRDWL_CIPHER_CCMP;
+		}
+
 		ret = sprdwl_connect(vif->priv, vif->ctx_id, &con);
 		if (ret)
 			goto err;
@@ -2320,6 +2357,7 @@ static int sprdwl_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 
 	return 0;
 err:
+	sprdwl_sae_reset(vif);
 	wl_ndev_log(L_ERR, ndev, "%s failed\n", __func__);
 	vif->sm_state = old_state;
 #ifdef STA_SOFTAP_SCC_MODE
@@ -2670,12 +2708,30 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
 	}
 
 	if (vif->sm_state == SPRDWL_CONNECTING &&
-	    conn_info->status == SPRDWL_CONNECT_SUCCESS)
+	    conn_info->status == SPRDWL_CONNECT_SUCCESS) {
+		if (vif->sae.connecting) {
+			u8 pmk[SPRDWL_SAE_PMK_LEN];
+			u8 pmkid[SPRDWL_SAE_PMKID_LEN];
+
+			if (!sprdwl_sae_extract_pmk_ie(conn_info->resp_ie,
+						       &conn_info->resp_ie_len,
+						       pmk, pmkid)) {
+				wl_ndev_log(L_ERR, vif->ndev,
+					    "%s SAE connect event missing PMK vendor IE\n",
+					    __func__);
+				goto err;
+			}
+			sprdwl_sae_start_4way(vif, conn_info->bssid, pmk, pmkid,
+					      conn_info->req_ie,
+					      conn_info->req_ie_len);
+			memzero_explicit(pmk, sizeof(pmk));
+			memzero_explicit(pmkid, sizeof(pmkid));
+		}
 		cfg80211_connect_result(vif->ndev,
 					conn_info->bssid, conn_info->req_ie, conn_info->req_ie_len,
 					conn_info->resp_ie, conn_info->resp_ie_len,
 					WLAN_STATUS_SUCCESS, GFP_KERNEL);
-	else if (vif->sm_state == SPRDWL_CONNECTED &&
+	} else if (vif->sm_state == SPRDWL_CONNECTED &&
 		 conn_info->status == SPRDWL_ROAM_SUCCESS){
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
 		struct cfg80211_roam_info roam_info = {
@@ -2753,6 +2809,7 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
 			"connect" : "roam", vif->ssid, vif->bssid);
 	return;
 err:
+	sprdwl_sae_reset(vif);
 #ifdef STA_SOFTAP_SCC_MODE
 	intf->sta_home_channel = 0;
 #endif
@@ -2797,6 +2854,7 @@ void sprdwl_report_disconnection(struct sprdwl_vif *vif, u16 reason_code)
 	/* Clear bssid & ssid */
 	memset(vif->bssid, 0, sizeof(vif->bssid));
 	memset(vif->ssid, 0, sizeof(vif->ssid));
+	sprdwl_sae_reset(vif);
 #ifdef WMMAC_WFA_CERTIFICATION
 	reset_wmmac_parameters(vif->priv);
 	reset_wmmac_ts_info();
@@ -3679,6 +3737,21 @@ static void sprdwl_save_ch_info(struct sprdwl_priv *priv, u32 band, u32 flags, i
 
 }
 
+static void sprdwl_copy_reg_rule(
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 15, 0) && \
+	LINUX_VERSION_CODE < KERNEL_VERSION(4, 18, 0))
+	struct ieee80211_reg_rule *dst,
+#else
+	struct unisoc_reg_rule *dst,
+#endif
+	const struct ieee80211_reg_rule *src)
+{
+	dst->freq_range = src->freq_range;
+	dst->power_rule = src->power_rule;
+	dst->flags = src->flags;
+	dst->dfs_cac_ms = src->dfs_cac_ms;
+}
+
 #if defined(CONFIG_CFG80211_INTERNAL_REGDB) && !defined(CUSTOM_REGDOMAIN)
 static void sprdwl_reg_notify(struct wiphy *wiphy,
 			      struct regulatory_request *request)
@@ -3734,7 +3807,7 @@ static void sprdwl_reg_notify(struct wiphy *wiphy,
 	}
 
 	rd_size = sizeof(struct sprdwl_ieee80211_regdomain) +
-	    n_rules * sizeof(struct ieee80211_reg_rule);
+	    n_rules * sizeof(rd->reg_rules[0]);
 
 	rd = kzalloc(rd_size, GFP_KERNEL);
 	if (!rd) {
@@ -3776,8 +3849,7 @@ static void sprdwl_reg_notify(struct wiphy *wiphy,
 			    i < n_rules) {
 				last_start_freq = freq_range->start_freq_khz;
 
-				memcpy(&rd->reg_rules[i], reg_rule,
-				       sizeof(struct ieee80211_reg_rule));
+				sprdwl_copy_reg_rule(&rd->reg_rules[i], reg_rule);
 				i++;
 
 				wl_info(
@@ -3877,11 +3949,7 @@ static void sprdwl_reg_notify(struct wiphy *wiphy,
 	}
 
 	rd_size = sizeof(struct sprdwl_ieee80211_regdomain) +
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 15, 0))
-	    n_rules * sizeof(struct ieee80211_reg_rule);
-#else
-	    n_rules * sizeof(struct unisoc_reg_rule);
-#endif
+	    n_rules * sizeof(rd->reg_rules[0]);
 
 	rd = kzalloc(rd_size, GFP_KERNEL);
 	if (!rd) {
@@ -3924,11 +3992,7 @@ static void sprdwl_reg_notify(struct wiphy *wiphy,
 			    i < n_rules) {
 				last_start_freq = freq_range->start_freq_khz;
 
-				memcpy(&rd->reg_rules[i], reg_rule,
-				       sizeof(struct ieee80211_reg_rule));
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 15, 0))
-				rd->reg_rules[i].dfs_cac_ms = 0;
-#endif
+				sprdwl_copy_reg_rule(&rd->reg_rules[i], reg_rule);
 				i++;
 
 				wiphy_dbg(wiphy,
@@ -4109,8 +4173,11 @@ void sprdwl_setup_wiphy(struct wiphy *wiphy, struct sprdwl_priv *priv)
 	if (priv->fw_std & SPRDWL_STD_11V)
 		wl_info("\tIEEE802.11v supported\n");
 
-	if (priv->fw_std & SPRDWL_STD_11W)
+	if (priv->fw_std & SPRDWL_STD_11W) {
 		wl_info("\tIEEE802.11w supported\n");
+		wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_SAE_OFFLOAD);
+		wl_info("\tWPA3-SAE STA offload enabled\n");
+	}
 
 	if (priv->fw_capa & SPRDWL_CAPA_5G) {
 		wl_info("\tDual band supported\n");

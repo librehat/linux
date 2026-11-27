@@ -41,6 +41,7 @@
 /* auth type */
 #define SPRDWL_AUTH_OPEN		0
 #define SPRDWL_AUTH_SHARED		1
+#define SPRDWL_AUTH_SAE			4
 /* parise or group key type */
 #define SPRDWL_GROUP			0
 #define SPRDWL_PAIRWISE			1
@@ -62,13 +63,14 @@
 #define SPRDWL_AKM_SUITE_WAPI_PSK	(4)
 #define SPRDWL_AKM_SUITE_8021X_SHA256	(5)
 #define SPRDWL_AKM_SUITE_PSK_SHA256	(6)
+#define SPRDWL_AKM_SUITE_SAE		(8)
 #define SPRDWL_AKM_SUITE_WAPI_CERT	(12)
 
 /* determine the actual values for the macros below*/
 #define SPRDWL_MAX_SCAN_SSIDS		12
 #define SPRDWL_MAX_SCAN_IE_LEN		2304
 #define SPRDWL_MAX_NUM_PMKIDS		4
-#define SPRDWL_MAX_KEY_INDEX		3
+#define SPRDWL_MAX_KEY_INDEX		5
 #define SPRDWL_SCAN_TIMEOUT_MS		10000
 #define SPRDWL_MAX_PFN_LIST_COUNT	9
 #define SPRDWL_MAX_IE_LEN           500

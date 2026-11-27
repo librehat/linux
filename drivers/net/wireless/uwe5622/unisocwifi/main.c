@@ -70,6 +70,9 @@ void sprdwl_netif_rx(struct sk_buff *skb, struct net_device *ndev)
 	wl_hex_dump(L_DBG, "RX packet: ", DUMP_PREFIX_OFFSET,
 			     16, 1, skb->data, skb->len, 0);
 
+	if (sprdwl_sae_rx_eapol(vif, skb))
+		return;
+
 	skb->dev = ndev;
 	skb->protocol = eth_type_trans(skb, ndev);
 	/* CHECKSUM_UNNECESSARY not supported by our hardware */
@@ -1495,6 +1498,7 @@ struct wireless_dev *sprdwl_add_iface(struct sprdwl_priv *priv,
 		wl_err("failed to add iface '%s'\n", name);
 		return (void *)vif;
 	}
+	sprdwl_sae_init(vif);
 #ifdef SYNC_DISCONNECT
 	init_waitqueue_head(&vif->disconnect_wq);
 	atomic_set(&vif->sync_disconnect_event, 0);
@@ -1512,6 +1516,7 @@ struct wireless_dev *sprdwl_add_iface(struct sprdwl_priv *priv,
 
 int sprdwl_del_iface(struct sprdwl_priv *priv, struct sprdwl_vif *vif)
 {
+	sprdwl_sae_deinit(vif);
 #ifdef DFS_MASTER
 	sprdwl_deinit_dfs_master(vif);
 #endif

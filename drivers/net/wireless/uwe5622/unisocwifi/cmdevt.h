@@ -400,6 +400,7 @@ struct sprdwl_cmd_set_ie {
 #define	SPRDWL_IE_ASSOC_RESP		4
 #define	SPRDWL_IE_BEACON_HEAD		5
 #define	SPRDWL_IE_BEACON_TAIL		6
+#define	SPRDWL_IE_SAE			7
 	u8 type;
 	__le16 len;
 	DECLARE_FLEX_ARRAY(u8, data);
