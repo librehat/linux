@@ -124,6 +124,8 @@ int sdio_pub_int_gnss_en0(void);
 int sdio_pub_int_RegCb(enum PUB_INT_BIT bit,
 		PUB_INT_ISR isr_handler);
 void sdio_pub_int_poweron(bool state);
+void sdio_pub_int_suspend(void);
+void sdio_pub_int_resume(void);
 int sdio_pub_int_init(int irq);
 int sdio_pub_int_deinit(void);
 #endif
