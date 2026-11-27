@@ -1354,10 +1354,8 @@ void sdiohal_enable_rx_irq(void)
 		return;
 
 	sdiohal_atomic_sub(1, &p_data->irq_cnt);
-	if (p_data->irq_num > 0) {
-		irq_set_irq_type(p_data->irq_num, p_data->irq_trigger_type);
+	if (p_data->irq_num > 0)
 		enable_irq(p_data->irq_num);
-	}
 }
 
 static irqreturn_t sdiohal_irq_handler(int irq, void *para)
@@ -1610,15 +1608,25 @@ static int sdiohal_parse_dt(void)
 			p_data->irq_type = SDIOHAL_RX_EXTERNAL_IRQ;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
 			p_data->gpio_num = fwnode_gpiod_get_index(
-				of_fwnode_handle(np), "sdio-ext-int-gpio", 0,
+				of_fwnode_handle(np), "m2-wakeup-ap", 0,
 				GPIOD_IN, "sdiohal-ext-irq");
+			if (IS_ERR(p_data->gpio_num))
+				p_data->gpio_num = fwnode_gpiod_get_index(
+					of_fwnode_handle(np),
+					"sdio-ext-int-gpio", 0,
+					GPIOD_IN, "sdiohal-ext-irq");
 			if (IS_ERR(p_data->gpio_num)) {
 				sdiohal_err("can not get sdio int gpio\n");
 				p_data->gpio_num = NULL;
 			}
 #else
 			p_data->gpio_num =
-				of_get_named_gpio(np, "sdio-ext-int-gpio", 0);
+				of_get_named_gpio(np, "m2-wakeup-ap-gpios", 0);
+			if (!gpio_is_valid(p_data->gpio_num))
+				p_data->gpio_num =
+					of_get_named_gpio(np,
+							  "sdio-ext-int-gpio",
+							  0);
 			if (!gpio_is_valid(p_data->gpio_num)) {
 				sdiohal_err("can not get sdio int gpio%d\n",
 					    p_data->gpio_num);
@@ -1764,8 +1772,11 @@ static void sdiohal_irq_handler_data(struct sdio_func *func)
 	sdio_release_host(p_data->sdio_func[FUNC_0]);
 	if (err < 0)
 		sdiohal_err("%s error %d\n", __func__, err);
-	else
+	else {
 		sdiohal_debug("%s: inband irq intx=0x%02x\n", __func__, intx);
+		if (!(intx & BIT(1)))
+			return;
+	}
 
 	sdiohal_lock_rx_ws();
 	sdiohal_rx_up();
@@ -1776,7 +1787,7 @@ static int sdiohal_suspend(struct device *dev)
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
 	struct mchn_ops_t *sdiohal_ops;
 	struct sdio_func *func;
-	int chn, ret = 0;
+	int chn, wait_cnt = 0, ret = 0;
 
 	sdiohal_info("[%s]enter\n", __func__);
 
@@ -1814,6 +1825,31 @@ static int sdiohal_suspend(struct device *dev)
 		sprdwcn_bus_aon_writeb(REG_AP_INT_CP0, (1 << AP_SUSPEND));
 	}
 
+	/*
+	 * Quiesce RX/pub_int IRQs and drain in-flight SDIO transfers while
+	 * flag_resume is still 1 so worker threads do not spin on
+	 * sdiohal_resume_wait() or touch SDIO after suspend begins.
+	 */
+	if (p_data->irq_type == SDIOHAL_RX_INBAND_IRQ) {
+		sdio_claim_host(p_data->sdio_func[FUNC_1]);
+		sdio_release_irq(p_data->sdio_func[FUNC_1]);
+		sdio_release_host(p_data->sdio_func[FUNC_1]);
+	} else if ((p_data->irq_type == SDIOHAL_RX_EXTERNAL_IRQ) &&
+		   (p_data->irq_num > 0)) {
+		disable_irq(p_data->irq_num);
+	}
+
+	while ((atomic_read(&p_data->irq_cnt) > 0 ||
+		(WCN_CARD_EXIST(&p_data->xmit_cnt) &&
+		 atomic_read(&p_data->xmit_cnt) > 0)) && wait_cnt < 100) {
+		usleep_range(1000, 2000);
+		wait_cnt++;
+	}
+
+#ifdef CONFIG_WCN_SLP
+	sdio_pub_int_suspend();
+#endif
+
 	atomic_set(&p_data->flag_suspending, 0);
 	atomic_set(&p_data->flag_resume, 0);
 	if (atomic_read(&p_data->irq_cnt))
@@ -1825,18 +1861,8 @@ static int sdiohal_suspend(struct device *dev)
 		sdiohal_info("%s pm_flags=0x%x, caps=0x%x\n", __func__,
 			     func->card->host->pm_flags,
 			     func->card->host->caps);
-	}
-
-	if (p_data->irq_type == SDIOHAL_RX_INBAND_IRQ) {
-		sdio_claim_host(p_data->sdio_func[FUNC_1]);
-		sdio_release_irq(p_data->sdio_func[FUNC_1]);
-		sdio_release_host(p_data->sdio_func[FUNC_1]);
-	} else if ((p_data->irq_type == SDIOHAL_RX_EXTERNAL_IRQ) &&
-		(p_data->irq_num > 0))
-		disable_irq(p_data->irq_num);
-
-	if (WCN_CARD_EXIST(&p_data->xmit_cnt))
 		atomic_add(SDIOHAL_REMOVE_CARD_VAL, &p_data->xmit_cnt);
+	}
 
 	return 0;
 }
@@ -1957,6 +1983,10 @@ static int sdiohal_resume(struct device *dev)
 	} else if ((p_data->irq_type == SDIOHAL_RX_EXTERNAL_IRQ) &&
 		(p_data->irq_num > 0))
 		enable_irq(p_data->irq_num);
+#endif
+
+#ifdef CONFIG_WCN_SLP
+	sdio_pub_int_resume();
 #endif
 
 	for (chn = 0; chn < SDIO_CHANNEL_NUM; chn++) {
@@ -2244,7 +2274,7 @@ static int sdiohal_probe(struct sdio_func *func,
 
 	if (p_data->irq_type == SDIOHAL_RX_EXTERNAL_IRQ) {
 		ret = request_irq(p_data->irq_num, sdiohal_irq_handler,
-				  p_data->irq_trigger_type | IRQF_NO_SUSPEND,
+				  p_data->irq_trigger_type,
 				  "sdiohal_irq", &func->dev);
 		if (ret != 0) {
 			sdiohal_err("request irq err gpio is %d\n",

@@ -1,3 +1,4 @@
+#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/export.h>
@@ -18,6 +19,8 @@
 struct sdio_int_t sdio_int = {0};
 
 atomic_t flag_pub_int_done;
+static atomic_t flag_pub_int_suspended;
+static atomic_t pub_int_busy;
 bool sdio_power_notify = FALSE;
 
 static inline int sdio_pub_int_clr0(unsigned char int_sts0)
@@ -110,6 +113,7 @@ static int pub_int_handle_thread(void *data)
 		/* enable interrupt, balance with disable in pub_int_isr */
 		if (atomic_read(&(sdio_int.chip_power_on)))
 			enable_irq(sdio_int.pub_int_num);
+		atomic_set(&pub_int_busy, 0);
 	}
 
 	return 0;
@@ -119,6 +123,7 @@ static int irq_cnt;
 static irqreturn_t pub_int_isr(int irq, void *para)
 {
 	disable_irq_nosync(irq);
+	atomic_set(&pub_int_busy, 1);
 	/*
 	 * for wifi powersave special handle, when wifi driver send
 	 * power save cmd to cp2, then pub int can't take wakelock,
@@ -178,7 +183,7 @@ static int sdio_pub_int_register(int irq)
 
 	ret = request_irq(sdio_int.pub_int_num,
 			pub_int_isr,
-			IRQF_TRIGGER_HIGH | IRQF_NO_SUSPEND,
+			IRQF_TRIGGER_HIGH,
 			"pub_int_isr",
 			NULL);
 	if (ret != 0) {
@@ -299,14 +304,47 @@ void sdio_pub_int_poweron(bool state)
 	if (prev == (int)state)
 		return;
 
-	if (state)
+	if (state) {
+		atomic_set(&flag_pub_int_suspended, 0);
 		enable_irq(sdio_int.pub_int_num);
-	else {
-		disable_irq(sdio_int.pub_int_num);
+	} else {
+		if (atomic_xchg(&flag_pub_int_suspended, 0) == 0)
+			disable_irq(sdio_int.pub_int_num);
+		atomic_set(&pub_int_busy, 0);
 		reinit_completion(&(sdio_int.pub_int_completion));
 	}
 }
 EXPORT_SYMBOL(sdio_pub_int_poweron);
+
+void sdio_pub_int_suspend(void)
+{
+	int wait_cnt = 0;
+
+	if (sdio_int.pub_int_num <= 0 || !atomic_read(&sdio_int.chip_power_on))
+		return;
+
+	if (atomic_xchg(&flag_pub_int_suspended, 1) == 0)
+		disable_irq(sdio_int.pub_int_num);
+
+	while (atomic_read(&pub_int_busy) && wait_cnt < 50) {
+		usleep_range(1000, 1500);
+		wait_cnt++;
+	}
+	if (atomic_read(&pub_int_busy))
+		SLP_MGR_ERR("%s timed out waiting pub_int handler\n", __func__);
+}
+EXPORT_SYMBOL(sdio_pub_int_suspend);
+
+void sdio_pub_int_resume(void)
+{
+	if (sdio_int.pub_int_num <= 0)
+		return;
+
+	if (atomic_xchg(&flag_pub_int_suspended, 0) == 1 &&
+	    atomic_read(&sdio_int.chip_power_on))
+		enable_irq(sdio_int.pub_int_num);
+}
+EXPORT_SYMBOL(sdio_pub_int_resume);
 
 int sdio_pub_int_init(int irq)
 {
@@ -314,6 +352,9 @@ int sdio_pub_int_init(int irq)
 		sdio_int.pub_int_num = 0;
 		return 0;
 	}
+
+	atomic_set(&flag_pub_int_suspended, 0);
+	atomic_set(&pub_int_busy, 0);
 
 	sdio_int.cp_slp_ctl = REG_CP_SLP_CTL;
 	sdio_int.ap_int_cp0 = REG_AP_INT_CP0;
