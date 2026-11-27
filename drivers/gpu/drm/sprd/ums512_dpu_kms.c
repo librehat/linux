@@ -275,14 +275,14 @@ static int dpu_dsi_send_seq_locked(struct ums512_dpu *dpu,
 	return 0;
 }
 
-static const struct dpu_dsi_cmd nt36523b_unlock_cmds[] = {
+static const struct dpu_dsi_cmd nt36523b_cmd_lock_cmds[] = {
 	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xff, 0x10 }, 0 },
 	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf0, 0x55 }, 0 },
 	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf1, 0xaa }, 0 },
 	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf2, 0x66 }, 0 },
 };
 
-static const struct dpu_dsi_cmd nt36523b_lock_cmds[] = {
+static const struct dpu_dsi_cmd nt36523b_cmd_unlock_cmds[] = {
 	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xff, 0x10 }, 0 },
 	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf0, 0xaa }, 0 },
 	{ MIPI_DSI_GENERIC_SHORT_WRITE_2_PARAM, 2, { 0xf1, 0x55 }, 0 },
@@ -312,8 +312,8 @@ static int dpu_bl_set_hw_locked(struct ums512_dpu *dpu, u8 level)
 	cmd12[2] = val12 & 0xff;
 
 	if (dpu->panel_type == DPU_PANEL_NT36523B) {
-		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_unlock_cmds,
-					      ARRAY_SIZE(nt36523b_unlock_cmds));
+		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_cmd_unlock_cmds,
+					      ARRAY_SIZE(nt36523b_cmd_unlock_cmds));
 		if (ret)
 			return ret;
 	}
@@ -322,8 +322,8 @@ static int dpu_bl_set_hw_locked(struct ums512_dpu *dpu, u8 level)
 				   cmd12, sizeof(cmd12));
 
 	if (dpu->panel_type == DPU_PANEL_NT36523B && !ret)
-		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_lock_cmds,
-					      ARRAY_SIZE(nt36523b_lock_cmds));
+		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_cmd_lock_cmds,
+					      ARRAY_SIZE(nt36523b_cmd_lock_cmds));
 
 	return ret;
 }
@@ -399,8 +399,8 @@ static void dpu_panel_sleep_in_locked(struct ums512_dpu *dpu)
 		break;
 	case DPU_PANEL_NT36523B:
 	default:
-		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_lock_cmds,
-					      ARRAY_SIZE(nt36523b_lock_cmds));
+		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_cmd_unlock_cmds,
+					      ARRAY_SIZE(nt36523b_cmd_unlock_cmds));
 		if (!ret)
 			ret = dpu_dsi_send_seq_locked(dpu, nt36523b_sleep_in_cmds,
 						      ARRAY_SIZE(nt36523b_sleep_in_cmds));
@@ -434,8 +434,8 @@ static void dpu_panel_sleep_out_locked(struct ums512_dpu *dpu)
 		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_sleep_out_cmds,
 					      ARRAY_SIZE(nt36523b_sleep_out_cmds));
 		if (!ret)
-			ret = dpu_dsi_send_seq_locked(dpu, nt36523b_unlock_cmds,
-						      ARRAY_SIZE(nt36523b_unlock_cmds));
+			ret = dpu_dsi_send_seq_locked(dpu, nt36523b_cmd_lock_cmds,
+						      ARRAY_SIZE(nt36523b_cmd_lock_cmds));
 		break;
 	}
 
