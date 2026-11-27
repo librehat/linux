@@ -352,7 +352,7 @@ static const struct dpu_dsi_cmd nt36523b_sleep_in_cmds[] = {
 };
 
 static const struct dpu_dsi_cmd nt36523b_sleep_out_cmds[] = {
-	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_EXIT_SLEEP_MODE }, 100 },
+	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_EXIT_SLEEP_MODE }, 120 },
 	{ MIPI_DSI_DCS_SHORT_WRITE, 1, { MIPI_DCS_SET_DISPLAY_ON }, 20 },
 };
 
@@ -431,8 +431,11 @@ static void dpu_panel_sleep_out_locked(struct ums512_dpu *dpu)
 		break;
 	case DPU_PANEL_NT36523B:
 	default:
-		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_sleep_out_cmds,
-					      ARRAY_SIZE(nt36523b_sleep_out_cmds));
+		ret = dpu_dsi_send_seq_locked(dpu, nt36523b_cmd_unlock_cmds,
+					      ARRAY_SIZE(nt36523b_cmd_unlock_cmds));
+		if (!ret)
+			ret = dpu_dsi_send_seq_locked(dpu, nt36523b_sleep_out_cmds,
+						      ARRAY_SIZE(nt36523b_sleep_out_cmds));
 		if (!ret)
 			ret = dpu_dsi_send_seq_locked(dpu, nt36523b_cmd_lock_cmds,
 						      ARRAY_SIZE(nt36523b_cmd_lock_cmds));
